@@ -753,3 +753,89 @@ sudo bash cleanup.sh
 ```bash
 sudo bash cleanup.sh --dry
 ```
+
+---
+
+## 附錄 — 備案：使用實驗室電腦作為攻擊機
+
+> 如果專用攻擊機不可用，可改用實驗室電腦 (Ubuntu 22.04) 充當紅方。
+> 為避免 demo 操作損壞實驗室電腦，紅方透過 Docker 容器隔離執行。
+> **此段落為備案方案，正常情況下不需要使用。**
+
+### 備案架構
+
+| 機器 | 角色 | 系統 | 說明 |
+|------|------|------|------|
+| **Lab 機器** | 靶機 + 藍軍 | Ubuntu 24.04 (原生) | 不變 |
+| **實驗室電腦** | 紅軍攻擊機 | Ubuntu 22.04 + Docker | 紅方工具全部跑在 Docker 容器內 |
+
+### 隔離範圍
+
+```
+宿主機 (Ubuntu 22.04, 實驗室電腦)
+│
+│  crontab / process / filesystem → 完全隔離，容器內操作不影響宿主機
+│  network → 共享 (--net=host)，ICMP C2 和 nmap 需要直接存取 LAN
+│
+└─ Docker container (redteam)
+    ├── /workspace/red_team/   (mount, 讀寫)
+    ├── /workspace/loot/       (mount, 讀寫)
+    └── /workspace/target/     (mount, 唯讀)
+```
+
+唯一會穿透到宿主機的操作是 `ip_switch.sh`（因為 `--net=host`），demo 結束後移除即可。
+
+### 前置需求
+
+實驗室電腦需安裝 Docker Engine：
+
+```bash
+# Ubuntu 22.04 安裝 Docker (只需一次)
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo usermod -aG docker $USER
+# 重新登入讓 group 生效
+```
+
+### 備案事前準備
+
+```bash
+cd ~/cybersecurity
+
+# 建置紅方 Docker image（只需一次）
+bash run_redteam.sh build
+
+# 啟動容器 — 這就是 T3 終端
+bash run_redteam.sh
+
+# 另開一個宿主機終端，進入同一個容器 — 這就是 T4 終端
+bash run_redteam.sh exec
+```
+
+### 備案指令對照表
+
+容器內已是 root 且 venv 已啟用，指令比原版更簡短：
+
+| 回合 | 原版指令 | 容器內指令 |
+|------|----------|------------|
+| 1 T4 | `sudo bash red_team/recon.sh <TARGET>` | `bash red_team/recon.sh <TARGET>` |
+| 1b T4 | `sudo bash red_team/ip_switch.sh add` | `bash red_team/ip_switch.sh add` |
+| 2 T3 | `sudo .venv/bin/python3 red_team/red_attacker.py ...` | `python3 red_team/red_attacker.py ...` |
+| 5 T3 | `.venv/bin/python3 red_team/red_reverse_shell.py ...` | `python3 red_team/red_reverse_shell.py ...` |
+| 6 T3 | `.venv/bin/python3 red_team/red_reverse_shell.py ...` | `python3 red_team/red_reverse_shell.py ...` |
+| 7 T3 | `sudo .venv/bin/python3 red_team/exfil_listener.py` | `python3 red_team/exfil_listener.py` |
+
+其餘指令（T4 的 curl、nc 等）在容器內不變。
+
+### 備案環境重置
+
+```bash
+# 1. 銷毀容器 — 容器內所有狀態自動消失
+bash run_redteam.sh stop
+
+# 2. 移除宿主機上的 IP alias（ip_switch.sh 透過 --net=host 影響宿主機）
+bash red_team/ip_switch.sh remove
+
+# Lab 機器的清理不變
+# sudo bash cleanup.sh
+```
