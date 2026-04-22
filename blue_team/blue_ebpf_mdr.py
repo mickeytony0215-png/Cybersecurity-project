@@ -223,10 +223,15 @@ TRACEPOINT_PROBE(syscalls, sys_enter_socket) {
     fill_common(&e, EVT_ICMP_RAW_SOCK);
     if (is_whitelisted(e.pid)) return 0;
 
-    /* Correlation: check if this PID or its parent called memfd_create */
+    /* Correlation: check if this PID or its parent called memfd_create.
+       Separate checks avoid Clang merging into pointer |= pointer,
+       which the BPF verifier rejects. */
+    int correlated = 0;
     u64 *t1 = memfd_pids.lookup(&e.pid);
+    if (t1) correlated = 1;
     u64 *t2 = memfd_pids.lookup(&e.ppid);
-    if (t1 || t2) {
+    if (t2) correlated = 1;
+    if (correlated) {
         /* HIGH CONFIDENCE: memfd + raw ICMP = fileless C2 agent */
         __builtin_memcpy(e.detail, "CORRELATED:memfd+icmp", 22);
         __KILL_ICMP_CORR__     /* → replaced with bpf_send_signal(9) if --kill */

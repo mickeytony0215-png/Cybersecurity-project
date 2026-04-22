@@ -150,9 +150,12 @@ TRACEPOINT_PROBE(syscalls, sys_enter_socket) {
     fill_common(&e, EVT_ICMP_RAW_SOCK);
     if (is_whitelisted(e.pid)) return 0;
 
+    int correlated = 0;
     u64 *t1 = memfd_pids.lookup(&e.pid);
+    if (t1) correlated = 1;
     u64 *t2 = memfd_pids.lookup(&e.ppid);
-    if (t1 || t2) {
+    if (t2) correlated = 1;
+    if (correlated) {
         __builtin_memcpy(e.detail, "CORRELATED:memfd+icmp", 22);
         __KILL_ICMP_CORR__
     } else {
