@@ -189,23 +189,26 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     char fname[128];
     bpf_probe_read_user_str(fname, sizeof(fname), args->filename);
 
-    int found = 0;
+    int found_filename = 0;
+    int found_argv = 0;
 
-    /* Check 1: filename itself is /proc/<pid>/fd/<N> */
+    /* Check 1: filename itself is /proc/<pid>/fd/<N>
+       This is used legitimately by systemd sd-executor → alert only */
     if (fname[0] == '/' && fname[1] == 'p' && fname[2] == 'r' &&
         fname[3] == 'o' && fname[4] == 'c' && fname[5] == '/') {
         for (int i = 6; i < 20; i++) {
             if (fname[i]   == '/' && fname[i+1] == 'f' &&
                 fname[i+2] == 'd' && fname[i+3] == '/') {
-                found = 1;
+                found_filename = 1;
                 break;
             }
         }
     }
 
     /* Check 2: argv[1] contains /proc/<pid>/fd/<N>
-       Catches: execve("/usr/bin/python3", ["python3", "/proc/PID/fd/N"]) */
-    if (!found) {
+       Catches: execve("/usr/bin/python3", ["python3", "/proc/PID/fd/N"])
+       This is the fileless malware evasion pattern → kill */
+    if (!found_filename) {
         char *arg1_ptr = NULL;
         bpf_probe_read_user(&arg1_ptr, sizeof(arg1_ptr),
                             (void *)((unsigned long)args->argv + 8));
@@ -217,7 +220,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
                 for (int i = 6; i < 20; i++) {
                     if (arg1[i]   == '/' && arg1[i+1] == 'f' &&
                         arg1[i+2] == 'd' && arg1[i+3] == '/') {
-                        found = 1;
+                        found_argv = 1;
                         __builtin_memcpy(fname, arg1, 128);
                         break;
                     }
@@ -226,11 +229,13 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
         }
     }
 
-    if (!found) return 0;
+    if (!found_filename && !found_argv) return 0;
 
     __builtin_memcpy(e.detail, fname, 128);
 
-    __KILL_EXEC__              /* → replaced with bpf_send_signal(9) if --kill */
+    if (found_argv) {
+        __KILL_EXEC__          /* only kill for argv match (red team pattern) */
+    }
 
     events.perf_submit(args, &e, sizeof(e));
     return 0;
