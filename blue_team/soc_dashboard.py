@@ -109,6 +109,8 @@ def watcher_loop(watchers, poll_interval):
                             stats['kills'] += 1
                         if evt.get('severity') == 'CRITICAL':
                             stats['criticals'] += 1
+                    if len(events) > 1000:
+                        del events[:-1000]
         time.sleep(poll_interval)
 
 
@@ -170,6 +172,8 @@ def api_event():
             stats['kills'] += 1
         if data.get('severity') == 'CRITICAL':
             stats['criticals'] += 1
+        if len(events) > 1000:
+            del events[:-1000]
     return 'OK', 200
 
 
