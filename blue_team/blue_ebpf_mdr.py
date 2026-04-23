@@ -224,9 +224,19 @@ TRACEPOINT_PROBE(syscalls, sys_enter_socket) {
     if (is_whitelisted(e.pid)) return 0;
 
     /* Correlation: check if this PID or its parent called memfd_create */
+    int is_correlated = 0;
+    
     u64 *t1 = memfd_pids.lookup(&e.pid);
-    u64 *t2 = memfd_pids.lookup(&e.ppid);
-    if (t1 || t2) {
+    if (t1 != NULL) {
+        is_correlated = 1;
+    } else {
+        u64 *t2 = memfd_pids.lookup(&e.ppid);
+        if (t2 != NULL) {
+            is_correlated = 1;
+        }
+    }
+
+    if (is_correlated) {
         /* HIGH CONFIDENCE: memfd + raw ICMP = fileless C2 agent */
         __builtin_memcpy(e.detail, "CORRELATED:memfd+icmp", 22);
         __KILL_ICMP_CORR__     /* → replaced with bpf_send_signal(9) if --kill */
@@ -369,7 +379,7 @@ def main():
     # then loads it into the kernel.  The kernel verifier checks it,
     # then the JIT compiler converts it to native x86_64 instructions.
     print('\n[*] Compiling & loading eBPF probes...')
-    b = BPF(text=src)
+    b = BPF(text=src, cflags=["-Wno-duplicate-decl-specifier", "-Wno-comment"])
     print('    tracepoint/syscalls/sys_enter_memfd_create  OK')
     print('    tracepoint/syscalls/sys_enter_execve        OK')
     print('    tracepoint/syscalls/sys_enter_socket         OK')
