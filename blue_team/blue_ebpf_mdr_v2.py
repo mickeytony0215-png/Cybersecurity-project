@@ -445,7 +445,7 @@ def main():
 
     # ── Load eBPF ────────────────────────────────────────────
     print('\n[*] Compiling & loading eBPF probes...')
-    b = BPF(text=src, cflags=["-Wno-duplicate-decl-specifier", "-Wno-comment"])
+    b = BPF(text=src, cflags=["-Wno-comment"])
     print('    tracepoint/syscalls/sys_enter_memfd_create  OK')
     print('    tracepoint/syscalls/sys_enter_execve        OK')
     print('    tracepoint/syscalls/sys_enter_socket         OK')
