@@ -342,7 +342,7 @@ def main():
     src = BPF_PROGRAM
     if args.kill:
         kill_stmt = 'e.killed = 1; bpf_send_signal(9);'
-        src = src.replace('__KILL_MEMFD__',     kill_stmt)
+        src = src.replace('__KILL_MEMFD__',     '')
         src = src.replace('__KILL_EXEC__',      kill_stmt)
         src = src.replace('__KILL_ICMP_CORR__', kill_stmt)
     else:
