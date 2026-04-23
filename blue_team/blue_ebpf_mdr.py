@@ -379,7 +379,7 @@ def main():
     # then loads it into the kernel.  The kernel verifier checks it,
     # then the JIT compiler converts it to native x86_64 instructions.
     print('\n[*] Compiling & loading eBPF probes...')
-    b = BPF(text=src, cflags=["-Wno-duplicate-decl-specifier", "-Wno-comment"])
+    b = BPF(text=src, cflags=["-Wno-comment"])
     print('    tracepoint/syscalls/sys_enter_memfd_create  OK')
     print('    tracepoint/syscalls/sys_enter_execve        OK')
     print('    tracepoint/syscalls/sys_enter_socket         OK')
