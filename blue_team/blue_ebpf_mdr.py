@@ -105,6 +105,26 @@ static inline void fill_common(struct event_t *e, u8 etype) {
 }
 
 /* ═════════════════════════════════════════════════════════════
+ *  HOOK 0: fork tracking — propagate memfd_pids to children
+ *
+ *  When a memfd_create caller forks, the child gets a new PID
+ *  that is NOT in memfd_pids.  Without this hook, the child
+ *  can open raw ICMP sockets without triggering correlation.
+ *  This hook copies the memfd_pids entry from parent to child
+ *  at fork time, so Hook 3 correlation works across fork+execve.
+ * ═════════════════════════════════════════════════════════════ */
+TRACEPOINT_PROBE(sched, sched_process_fork) {
+    u32 ppid = args->parent_pid;
+    u32 cpid = args->child_pid;
+
+    u64 *ts = memfd_pids.lookup(&ppid);
+    if (ts != NULL) {
+        memfd_pids.update(&cpid, ts);
+    }
+    return 0;
+}
+
+/* ═════════════════════════════════════════════════════════════
  *  HOOK 1: memfd_create — fileless malware staging detector
  *
  *  This tracepoint fires at the ENTRY of the memfd_create(2)
@@ -169,24 +189,43 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     char fname[128];
     bpf_probe_read_user_str(fname, sizeof(fname), args->filename);
 
-    /* Prefix check: /proc/ = bytes 2f 70 72 6f 63 2f */
-    if (fname[0] != '/' || fname[1] != 'p' || fname[2] != 'r' ||
-        fname[3] != 'o' || fname[4] != 'c' || fname[5] != '/')
-        return 0;
-
-    /* Scan for "/fd/" substring.
-       The path format is /proc/<PID>/fd/<N> where PID is 1-7 digits.
-       So "/fd/" appears at positions 7 (1-digit PID) through 13 (7-digit).
-       We scan 6..19 to cover all cases with a safety margin.
-       This bounded loop (14 iterations) passes the eBPF verifier. */
     int found = 0;
-    for (int i = 6; i < 20; i++) {
-        if (fname[i]   == '/' && fname[i+1] == 'f' &&
-            fname[i+2] == 'd' && fname[i+3] == '/') {
-            found = 1;
-            break;
+
+    /* Check 1: filename itself is /proc/<pid>/fd/<N> */
+    if (fname[0] == '/' && fname[1] == 'p' && fname[2] == 'r' &&
+        fname[3] == 'o' && fname[4] == 'c' && fname[5] == '/') {
+        for (int i = 6; i < 20; i++) {
+            if (fname[i]   == '/' && fname[i+1] == 'f' &&
+                fname[i+2] == 'd' && fname[i+3] == '/') {
+                found = 1;
+                break;
+            }
         }
     }
+
+    /* Check 2: argv[1] contains /proc/<pid>/fd/<N>
+       Catches: execve("/usr/bin/python3", ["python3", "/proc/PID/fd/N"]) */
+    if (!found) {
+        char *arg1_ptr = NULL;
+        bpf_probe_read_user(&arg1_ptr, sizeof(arg1_ptr),
+                            (void *)((unsigned long)args->argv + 8));
+        if (arg1_ptr) {
+            char arg1[128];
+            bpf_probe_read_user_str(arg1, sizeof(arg1), arg1_ptr);
+            if (arg1[0] == '/' && arg1[1] == 'p' && arg1[2] == 'r' &&
+                arg1[3] == 'o' && arg1[4] == 'c' && arg1[5] == '/') {
+                for (int i = 6; i < 20; i++) {
+                    if (arg1[i]   == '/' && arg1[i+1] == 'f' &&
+                        arg1[i+2] == 'd' && arg1[i+3] == '/') {
+                        found = 1;
+                        __builtin_memcpy(fname, arg1, 128);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     if (!found) return 0;
 
     __builtin_memcpy(e.detail, fname, 128);
@@ -380,8 +419,9 @@ def main():
     # then the JIT compiler converts it to native x86_64 instructions.
     print('\n[*] Compiling & loading eBPF probes...')
     b = BPF(text=src, cflags=["-Wno-comment"])
+    print('    tracepoint/sched/sched_process_fork          OK  [fork tracking]')
     print('    tracepoint/syscalls/sys_enter_memfd_create  OK')
-    print('    tracepoint/syscalls/sys_enter_execve        OK')
+    print('    tracepoint/syscalls/sys_enter_execve        OK  [+argv scan]')
     print('    tracepoint/syscalls/sys_enter_socket         OK')
 
     # ── Populate whitelist from userspace ────────────────────
