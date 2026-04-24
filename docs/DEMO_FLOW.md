@@ -12,15 +12,13 @@
 | 機器 | 角色 | 系統 | 說明 |
 |------|------|------|------|
 | **Lab 機器** | 靶機 + 藍軍 | Ubuntu 24.04 (原生) | 跑 target、honeypot、eBPF、MDR、SOC |
-| **WSL2 筆電** | 紅軍攻擊機 | Ubuntu 22.04 (WSL2) | 跑 recon、exploit、C2、reverse shell |
-
-> WSL2 沒有 linux-headers 所以跑不了 eBPF，紅方工具不需要 eBPF 所以沒差。
+| **攻擊機** | 紅軍攻擊機 | Ubuntu 24.04 (原生) | 跑 recon、exploit、C2、reverse shell |
 
 | 項目 | 說明 |
 |------|------|
-| 終端數量 | **4 個**（Lab 2 個 + WSL2 2 個） |
+| 終端數量 | **4 個**（Lab 2 個 + 攻擊機 2 個） |
 | Root 權限 | Lab 端（靶機 + 藍軍）需要 sudo |
-| 安裝 | 兩台都跑 `bash setup_env.sh`（會自動偵測 WSL2） |
+| 安裝 | 兩台都跑 `bash setup_env.sh` |
 
 ### 終端配置
 
@@ -28,8 +26,8 @@
 |------|------|------|----------|
 | **T1** | Lab | 靶機 (Target + Honeypot) | 白色 |
 | **T2** | Lab | 藍軍 (Blue Team) | 藍色 |
-| **T3** | WSL2 | 紅軍 C2 / Listener | 紅色 |
-| **T4** | WSL2 | 紅軍攻擊指令 | 黃色 |
+| **T3** | 攻擊機 | 紅軍 C2 / Listener | 紅色 |
+| **T4** | 攻擊機 | 紅軍攻擊指令 | 黃色 |
 
 > **提示**：T1 需要同時跑靶機和蜜罐，可用 tmux 分割或開兩個子終端。
 
@@ -39,7 +37,7 @@
 
 ```
 <TARGET_IP>   = Lab 機器 IP（例如 100.103.146.70）
-<ATTACKER_IP> = WSL2 攻擊機 IP（你的 WSL2 IP）
+<ATTACKER_IP> = 攻擊機 IP（例如 192.168.1.14）
 ```
 
 ---
@@ -296,7 +294,7 @@ target-machine
 
 ### T3 — 在 C2 中部署 Exfil Agent
 
-先在 WSL2 另開一個終端啟動 Exfil Listener：
+先在攻擊機另開一個終端啟動 Exfil Listener：
 
 ```bash
 sudo .venv/bin/python3 red_team/exfil_listener.py
@@ -315,7 +313,7 @@ sudo .venv/bin/python3 red_team/exfil_listener.py
 在 C2 prompt 中，用 `deploy_agent.sh` 產生的 one-liner 部署：
 
 ```bash
-# 先在 WSL2 產生 deploy 指令
+# 先在攻擊機產生 deploy 指令
 bash red_team/deploy_agent.sh <ATTACKER_IP>
 ```
 

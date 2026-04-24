@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Red Team - Exfil Listener (攻擊機 WSL2 端)
+Red Team - Exfil Listener (攻擊機端)
 接收 DNS/ICMP 隱蔽通道外傳資料，重組並安全儲存
 Usage: sudo python3 exfil_listener.py [LISTEN_IP]
 """
