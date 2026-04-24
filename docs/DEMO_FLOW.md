@@ -203,16 +203,16 @@ bash red_team/ip_switch.sh add
 
 預期輸出：
 ```
-[*] Adding alias IP: 172.22.137.15 on eth0
+[*] Adding alias IP: 192.168.1.15 on wlp132s0
 [+] Done. Current IPs:
-    inet 172.22.137.14/20    ← 被封鎖的 IP
-    inet 172.22.137.15/20    ← 新的未封鎖 IP
+    inet 192.168.1.14/24    ← 被封鎖的 IP
+    inet 192.168.1.15/24    ← 新的未封鎖 IP
 ```
 
 ### T4 — 用新 IP 測試連線
 
 ```bash
-curl -s --interface 172.22.137.15 http://<TARGET_IP>:9999/
+curl -s --interface 192.168.1.15 http://<TARGET_IP>:9999/
 ```
 
 → 連線成功！新 IP 未被封鎖。

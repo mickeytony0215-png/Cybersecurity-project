@@ -5,14 +5,14 @@
 # MITRE ATT&CK: Defense Evasion (IP alias — no specific technique ID)
 # ============================================
 
-PRIMARY_IP="172.22.137.14"
-ALIAS_IP="172.22.137.15"
-INTERFACE="eth0"
+PRIMARY_IP="192.168.1.14"
+ALIAS_IP="192.168.1.15"
+INTERFACE="wlp132s0"
 
 case "$1" in
     add)
         echo "[*] Adding alias IP: $ALIAS_IP on $INTERFACE"
-        sudo ip addr add "$ALIAS_IP/20" dev "$INTERFACE"
+        sudo ip addr add "$ALIAS_IP/24" dev "$INTERFACE"
         echo "[+] Done. Current IPs:"
         ip addr show "$INTERFACE" | grep inet
         echo ""
@@ -24,7 +24,7 @@ case "$1" in
         ;;
     remove)
         echo "[*] Removing alias IP: $ALIAS_IP"
-        sudo ip addr del "$ALIAS_IP/20" dev "$INTERFACE"
+        sudo ip addr del "$ALIAS_IP/24" dev "$INTERFACE"
         echo "[+] Done. Current IPs:"
         ip addr show "$INTERFACE" | grep inet
         ;;
