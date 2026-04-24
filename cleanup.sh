@@ -87,8 +87,8 @@ echo ""
 echo "[3/6] Removing IP aliases..."
 
 # Read alias IP from ip_switch.sh if it exists
-ALIAS_IP="172.22.137.15"
-INTERFACE="eth0"
+ALIAS_IP="192.168.1.15"
+INTERFACE="wlp132s0"
 if [[ -f "$SCRIPT_DIR/red_team/ip_switch.sh" ]]; then
     ALIAS_IP=$(grep 'ALIAS_IP=' "$SCRIPT_DIR/red_team/ip_switch.sh" | head -1 | cut -d'"' -f2)
     INTERFACE=$(grep 'INTERFACE=' "$SCRIPT_DIR/red_team/ip_switch.sh" | head -1 | cut -d'"' -f2)
@@ -96,7 +96,7 @@ fi
 
 if ip addr show "$INTERFACE" 2>/dev/null | grep -q "$ALIAS_IP"; then
     echo "  Found alias IP: $ALIAS_IP on $INTERFACE"
-    run "ip addr del $ALIAS_IP/20 dev $INTERFACE"
+    run "ip addr del $ALIAS_IP/24 dev $INTERFACE"
 else
     echo "  No alias IP found (clean)."
 fi
