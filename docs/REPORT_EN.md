@@ -20,7 +20,7 @@ The rest of this report walks through the technical details of each component --
 
 ```
 ┌────────────────────────────┐              ┌──────────────────────────────────┐
-│   Attacker Machine (WSL2)  │              │     Lab Server (Target + Blue)   │
+│   Attacker Machine (攻擊機) │              │     Lab Server (Target + Blue)   │
 │                            │              │                                  │
 │  red_attacker.py  (C2)     │    ICMP      │  target_app.py    (Flask :9999)  │
 │  red_reverse_shell.py      │◄════════════►│  honeypot.py      (SSH :2222)    │
@@ -33,7 +33,7 @@ The rest of this report walks through the technical details of each component --
 └────────────────────────────┘              └──────────────────────────────────┘
 ```
 
-- Attacker (WSL2): Ubuntu 22.04, root privileges for raw ICMP sockets
+- Attacker: Ubuntu 24.04 (native), root privileges for raw ICMP sockets
 - Lab Server (Native Linux): Ubuntu 24.04, runs target services, eBPF defense, and SOC dashboard
 - Protocols: ICMP echo request (fileless C2), TCP (reverse shell), DNS/ICMP (exfiltration)
 
@@ -304,13 +304,13 @@ MITRE ATT&CK: T1082 (System Information Discovery)
 After the red team's reconnaissance triggers the honeypot on port 2222, the network MDR blocks their IP via iptables. To regain network access, `ip_switch.sh` uses IP aliasing to add a secondary address to the same interface:
 
 ```bash
-sudo ip addr add 172.22.137.15/20 dev eth0
+sudo ip addr add 192.168.1.15/24 dev wlp132s0
 ```
 
 | IP | Role | Status |
 |----|------|--------|
-| 172.22.137.14 (primary) | Triggered honeypot | Blocked by iptables DROP |
-| 172.22.137.15 (alias) | Attack via port 9999 | Not blocked (new, unknown IP) |
+| 192.168.1.14 (primary) | Triggered honeypot | Blocked by iptables DROP |
+| 192.168.1.15 (alias) | Attack via port 9999 | Not blocked (new, unknown IP) |
 
 This works because iptables rules are IP-based -- a new source IP has no matching DROP rule, so packets pass through. Of course, this also shows why IP-based blocking alone isn't enough; the blue team needs behavior-based detection (eBPF) that works regardless of source IP.
 

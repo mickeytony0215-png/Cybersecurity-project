@@ -51,7 +51,7 @@
 │       ├── exfiltration-design.md
 │       └── exfiltration-plan.md
 │
-├── setup_env.sh                # One-command environment setup (auto-detects WSL2)
+├── setup_env.sh                # One-command environment setup (auto-detects environment)
 ├── cleanup.sh                  # One-command environment reset (kill, iptables, logs)
 ├── requirements.txt            # Python dependencies
 └── README.md                   # This file
@@ -69,12 +69,12 @@ cd Cybersecurity-project
 bash setup_env.sh
 ```
 
-We use two machines. `setup_env.sh` auto-detects whether you're on WSL2 or native Linux and installs the right packages.
+We use two machines. `setup_env.sh` auto-detects your environment and installs the right packages.
 
 | Machine | Role | OS | eBPF |
 |---------|------|----|------|
 | Lab server | Target + Blue Team | Ubuntu 24.04 (native) | Yes |
-| Student laptop | Red Team (attacker) | Ubuntu 22.04 (WSL2) | Not needed |
+| 攻擊機 | Red Team (attacker) | Ubuntu 24.04 (native) | Not needed |
 
 Run `git clone` + `bash setup_env.sh` on both machines.
 
@@ -91,10 +91,10 @@ sudo .venv/bin/python3 target/target_app.py
 # Lab machine — Terminal 2: Blue Team (藍軍 eBPF v2)
 sudo .venv/bin/python3 blue_team/blue_ebpf_mdr_v2.py --kill
 
-# WSL2 — Terminal 3: Red Team C2 (紅軍 C2 Server)
+# 攻擊機 — Terminal 3: Red Team C2 (紅軍 C2 Server)
 sudo .venv/bin/python3 red_team/red_attacker.py -t <TARGET_IP> -l <ATTACKER_IP>
 
-# WSL2 — Terminal 4: Red Team Attack (紅軍觸發攻擊)
+# 攻擊機 — Terminal 4: Red Team Attack (紅軍觸發攻擊)
 # Paste the curl command printed by Terminal 3
 ```
 

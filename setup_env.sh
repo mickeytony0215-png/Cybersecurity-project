@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # setup_env.sh - Attack-Defense Lab Environment Setup
-# Tested on: Ubuntu 22.04 / 24.04 (WSL2 or native VM)
+# Tested on: Ubuntu 24.04 (native or WSL2)
 #
-# Automatically detects WSL2 and adjusts installation:
-#   - WSL2:   Red team tools only (no eBPF — kernel headers unavailable)
+# Automatically detects environment and adjusts installation:
 #   - Native: Full installation (red + blue + eBPF)
+#   - WSL2:   Red team tools only (no eBPF — kernel headers unavailable)
 #
 # Uses Python venv for isolation — won't pollute system packages.
 # ============================================================

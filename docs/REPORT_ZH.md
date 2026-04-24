@@ -26,7 +26,7 @@
 
 ```
 ┌──────────────────────────┐              ┌──────────────────────────────┐
-│  Attacker (WSL2 筆電)     │              │  Target Machine (Lab 機器)    │
+│  Attacker (攻擊機)         │              │  Target Machine (Lab 機器)    │
 │                          │              │                              │
 │  red_attacker.py         │    ICMP      │  target_app.py  (Flask :9999)│
 │  (SSTI + memfd + C2)     │◄════════════►│  honeypot.py    (SSH  :2222) │
@@ -42,7 +42,7 @@
 └──────────────────────────┘              └──────────────────────────────┘
 ```
 
-- **攻擊機**: WSL2 Linux (Ubuntu 22.04)，紅隊工具不需要 eBPF 支援
+- **攻擊機**: Ubuntu 24.04 原生，紅隊工具不需要 eBPF 支援
 - **靶機/防禦機**: Lab 機器 (Ubuntu 24.04 原生)，跑靶機服務跟全部藍隊防禦
 - **通訊協議**: ICMP Echo Request（主要 C2）、TCP（反向 Shell）、DNS/ICMP（資料外洩）
 
@@ -116,7 +116,7 @@ Rule 插在 INPUT chain 的 position 1（最高優先），確保比任何現有
 
 #### 1.2 IP 切換繞過 (ip_switch.sh)
 
-**原理**: 基於 IP 的封鎖可以用 IP alias 繞過。紅隊用 `ip_switch.sh` 在 WSL2 的 network interface 上掛一個新的 IP：
+**原理**: 基於 IP 的封鎖可以用 IP alias 繞過。紅隊用 `ip_switch.sh` 在攻擊機的 network interface 上掛一個新的 IP：
 
 | IP | 用途 | 結果 |
 |----|------|------|
