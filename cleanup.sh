@@ -50,6 +50,13 @@ for proc in target_app.py honeypot.py blue_ebpf_mdr.py blue_ebpf_mdr_v2.py \
     fi
 done
 
+# Kill deploy_agent.sh HTTP server (port 8888)
+http_pids=$(lsof -ti :8888 2>/dev/null || true)
+if [[ -n "$http_pids" ]]; then
+    echo "  Found HTTP server on port 8888: PID $http_pids"
+    run "kill -9 $http_pids"
+fi
+
 # Kill any memfd agent processes
 memfd_pids=$(ls -la /proc/[0-9]*/exe 2>/dev/null | grep 'memfd:' | awk -F/ '{print $3}' || true)
 if [[ -n "$memfd_pids" ]]; then
@@ -152,14 +159,14 @@ echo ""
 # ── 6. Remove crontab persistence ───────────────────────────
 echo "[6/6] Checking crontab for red team persistence..."
 
-cron_entries=$(crontab -l 2>/dev/null | grep -c '/dev/tcp\|reverse\|shell\|4444' || true)
+cron_entries=$(crontab -l 2>/dev/null | grep -c '/dev/tcp\|reverse\|shell\|4444\|cache_update\|exfil_agent' || true)
 if [[ "$cron_entries" -gt 0 ]]; then
     echo "  Found $cron_entries suspicious crontab entries:"
-    crontab -l 2>/dev/null | grep '/dev/tcp\|reverse\|shell\|4444' | while read line; do
+    crontab -l 2>/dev/null | grep '/dev/tcp\|reverse\|shell\|4444\|cache_update\|exfil_agent' | while read line; do
         echo "    $line"
     done
     if ! $DRY; then
-        crontab -l 2>/dev/null | grep -v '/dev/tcp\|reverse\|shell\|4444' | crontab - 2>/dev/null || crontab -r 2>/dev/null || true
+        crontab -l 2>/dev/null | grep -v '/dev/tcp\|reverse\|shell\|4444\|cache_update\|exfil_agent' | crontab - 2>/dev/null || crontab -r 2>/dev/null || true
     else
         echo "  [dry] Would remove suspicious entries"
     fi
