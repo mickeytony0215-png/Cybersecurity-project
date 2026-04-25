@@ -20,3 +20,4 @@
 - deploy_agent.sh 使用 HTTP server 方式（v3），不是 base64
 - C2 有 15 秒 timeout，長時間指令要用 `nohup ... &` 背景執行
 - exfil_agent.py 執行完會自刪（`os.remove(__file__)`）
+- **不要在 README 或任何文件的分工表寫組員姓名和學號**，只留 Role 和 Responsibilities
