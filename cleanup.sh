@@ -95,14 +95,14 @@ if [[ -f "$SCRIPT_DIR/red_team/ip_switch.sh" ]]; then
 fi
 
 found_alias=false
-while read -r addr; do
+for addr in $(ip -4 addr show "$INTERFACE" 2>/dev/null | awk '/inet /{print $2}'); do
     ip_only="${addr%%/*}"
     if [[ "$ip_only" != "$PRIMARY_IP" ]]; then
         echo "  Found alias IP: $addr on $INTERFACE"
         run "ip addr del $addr dev $INTERFACE"
         found_alias=true
     fi
-done < <(ip -4 addr show "$INTERFACE" 2>/dev/null | grep -oP 'inet \K[\d./]+' || true)
+done
 
 if ! $found_alias; then
     echo "  No alias IP found (clean)."
