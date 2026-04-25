@@ -367,15 +367,22 @@ def dashboard():
 # ═══════════════════════════════════════════════════════════════
 
 def main():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _project_root = os.path.dirname(_script_dir)
+    _default_trap_log = os.path.join(_project_root, 'trap.log')
+    _default_soc_log = os.path.join(_project_root, 'soc_events.jsonl')
+
     ap = argparse.ArgumentParser(description='SOC Real-time Dashboard')
     ap.add_argument('--port', type=int, default=8080,
                     help='Dashboard web port (default 8080)')
     ap.add_argument('--host', default='0.0.0.0',
                     help='Bind address (default 0.0.0.0)')
-    ap.add_argument('--trap-log', default='trap.log',
-                    help='Honeypot trap.log path')
-    ap.add_argument('--soc-log', default='soc_events.jsonl',
-                    help='SOC events JSONL path')
+    ap.add_argument('--trap-log', default=_default_trap_log,
+                    help=f'Honeypot trap.log path (default: '
+                         f'{_default_trap_log})')
+    ap.add_argument('--soc-log', default=_default_soc_log,
+                    help=f'SOC events JSONL path (default: '
+                         f'{_default_soc_log})')
     ap.add_argument('--poll', type=float, default=0.5,
                     help='Log poll interval in seconds (default 0.5)')
     args = ap.parse_args()

@@ -136,6 +136,7 @@ def main():
     _script_dir = os.path.dirname(os.path.abspath(__file__))
     _project_root = os.path.dirname(_script_dir)  # blue_team/ → project root
     _default_log = os.path.join(_project_root, 'trap.log')
+    _default_soc_log = os.path.join(_project_root, 'soc_events.jsonl')
 
     ap = argparse.ArgumentParser(
         description='Blue Team Network MDR (Honeypot + iptables)')
@@ -145,8 +146,9 @@ def main():
                     help='Poll interval in seconds (default: 1.0)')
     ap.add_argument('--cleanup', action='store_true',
                     help='Remove all iptables rules on exit')
-    ap.add_argument('--soc-log', type=str, default='',
-                    help='Write events to JSONL file for SOC dashboard')
+    ap.add_argument('--soc-log', type=str, default=_default_soc_log,
+                    help=f'Write events to JSONL file for SOC dashboard '
+                         f'(default: {_default_soc_log})')
     args = ap.parse_args()
 
     if os.geteuid() != 0:

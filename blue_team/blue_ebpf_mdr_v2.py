@@ -412,6 +412,10 @@ def format_connect_detail(detail_raw: bytes, port: int) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def main():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _project_root = os.path.dirname(_script_dir)
+    _default_soc_log = os.path.join(_project_root, 'soc_events.jsonl')
+
     ap = argparse.ArgumentParser(
         description='Blue Team eBPF MDR Engine v2 (Reverse Shell Detection)')
     ap.add_argument('--kill', action='store_true',
@@ -421,8 +425,9 @@ def main():
     ap.add_argument('--suspect-ports', type=str,
                     default=','.join(str(p) for p in DEFAULT_SUSPECT_PORTS),
                     help=f'Suspicious ports (default: {DEFAULT_SUSPECT_PORTS})')
-    ap.add_argument('--soc-log', type=str, default='',
-                    help='Write events to JSONL file for SOC dashboard')
+    ap.add_argument('--soc-log', type=str, default=_default_soc_log,
+                    help=f'Write events to JSONL file for SOC dashboard '
+                         f'(default: {_default_soc_log})')
     args = ap.parse_args()
 
     if os.geteuid() != 0:
