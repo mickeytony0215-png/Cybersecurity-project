@@ -387,8 +387,10 @@ sudo .venv/bin/python3 blue_team/blue_ebpf_mdr.py --kill
 +====================================================+
   Auto-kill : ENABLED
 
-  [!] Found 1 existing memfd process(es):
-      PID=12345  COMM=python3  EXE=/memfd: (deleted)
+  [!] Found 1 existing fileless process(es):
+      PID=12345  COMM=python3  REASON=python-proc-fd  EXE=/usr/bin/python3
+        DETAIL=/proc/12345/fd/3 -> memfd:agent (deleted)
+        CMD=python3 /proc/12345/fd/3 <ATTACKER_IP>
         -> KILLED
 ```
 
@@ -403,7 +405,7 @@ C2> whoami
 
 ### 講解要點
 
-- 藍方即使**比紅方晚上線**，一樣能透過 `/proc/*/exe` 掃描找到 memfd 進程
+- 藍方即使**比紅方晚上線**，一樣能透過 cold-start `/proc` 掃描找到已存在的 fileless agent
 - `bpf_send_signal(SIGKILL)` 在 kernel 層直接殺掉進程
 - 冷啟動掃描算是補償偵測，彌補 eBPF 只能偵測新事件的限制
 
