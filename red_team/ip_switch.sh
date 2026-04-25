@@ -6,7 +6,7 @@
 # ============================================
 
 PRIMARY_IP="192.168.1.14"
-ALIAS_IP="192.168.1.15"
+ALIAS_IP="${2:-192.168.1.15}"
 INTERFACE="wlp132s0"
 
 case "$1" in
@@ -33,10 +33,15 @@ case "$1" in
         ip addr show "$INTERFACE" | grep inet
         ;;
     *)
-        echo "Usage: $0 {add|remove|status}"
+        echo "Usage: $0 {add|remove|status} [CUSTOM_IP]"
         echo ""
-        echo "  add    - Add alias IP ($ALIAS_IP) for bypassing MDR block"
-        echo "  remove - Remove alias IP after demo"
-        echo "  status - Show current IPs"
+        echo "  add [IP]    - Add alias IP (default: 192.168.1.15) for bypassing MDR block"
+        echo "  remove [IP] - Remove alias IP after demo"
+        echo "  status      - Show current IPs"
+        echo ""
+        echo "Examples:"
+        echo "  $0 add                 # use default 192.168.1.15"
+        echo "  $0 add 192.168.1.20    # use custom IP"
+        echo "  $0 remove 192.168.1.20 # remove custom IP"
         ;;
 esac
