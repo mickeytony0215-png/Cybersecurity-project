@@ -147,7 +147,7 @@ sudo bash red_team/ip_switch.sh add
 ### T4 — 紅方嘗試連線 SSH（踩到蜜罐）
 
 ```bash
-nc -v <TARGET_IP> 2222
+nc -s <ATTACKER_IP> -v <TARGET_IP> 2222
 ```
 
 預期輸出：
