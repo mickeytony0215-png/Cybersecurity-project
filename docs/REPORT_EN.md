@@ -574,7 +574,7 @@ The correlation logic is what makes this effective:
 - Raw ICMP socket alone → ALERT (could be ping)
 - `memfd_create` + raw ICMP socket from the same process → CRITICAL + CORRELATED (fileless C2 confirmed)
 
-There's also a cold-start detection feature: at startup, a `/proc/*/exe` scanner checks for already-running memfd processes, covering the gap before eBPF hooks are active. With `--kill` enabled, those are killed immediately via `os.kill(pid, SIGKILL)`.
+There's also a cold-start detection feature: at startup, a two-layer `/proc` scanner checks for already-running fileless processes: (1) `/proc/*/exe` for direct memfd execution, (2) `/proc/*/cmdline` + `/proc/*/fd/*` for Python fileless loader patterns (`python3 /proc/<pid>/fd/<N>` pointing to memfd). With `--kill` enabled, those are killed immediately via `os.kill(pid, SIGKILL)`.
 
 Self-PID is always whitelisted, and you can add more via `--whitelist 1234,5678`.
 
@@ -720,7 +720,7 @@ The takeaway is that no single defense is sufficient. Security is a continuous a
 | T1620 | Reflective Code Loading | `sys_enter_memfd_create` tracepoint | v1 |
 | T1059 | Execution from `/proc/fd` | `sys_enter_execve` filename pattern match | v1 |
 | T1095 | Raw ICMP Socket | `sys_enter_socket(AF_INET, SOCK_RAW, ICMP)` | v1 |
-| T1070 | Indicator Removal | `/proc/*/exe` cold-start scan for memfd processes | v1 |
+| T1070 | Indicator Removal | `/proc` cold-start scan (exe + cmdline + fd) | v1 |
 | T1571 | Non-Standard Port Connect | `sys_enter_connect` port check | v2 |
 | T1059.006 | Reverse Shell fd Hijack | `sys_enter_dup2/dup3` bitmask tracking | v2 |
 | T1595 | Active Scanning | Honeypot trap on port 2222 | Network |

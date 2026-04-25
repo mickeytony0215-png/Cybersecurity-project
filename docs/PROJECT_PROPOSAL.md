@@ -265,7 +265,7 @@ Three eBPF tracepoint hooks detect fileless malware:
 | Hook 2 | `sys_enter_execve` | Pattern-match filename for `/proc/<pid>/fd/` -- indicates execution from anonymous memory |
 | Hook 3 | `sys_enter_socket` | Detect `socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)`; correlate with memfd PID for high-confidence C2 detection |
 
-When `--kill` mode is enabled, `bpf_send_signal(SIGKILL)` terminates the malicious process from kernel space before the syscall completes. A cold-start scanner also checks `/proc/*/exe` for existing `memfd:` processes at startup.
+When `--kill` mode is enabled, `bpf_send_signal(SIGKILL)` terminates the malicious process from kernel space before the syscall completes. A cold-start scanner does two-layer `/proc` inspection at startup: `/proc/*/exe` for direct memfd execution, and `/proc/*/cmdline` + `/proc/*/fd/*` for Python fileless loader patterns.
 
 **Component 4 -- eBPF MDR v2 (`blue_team/blue_ebpf_mdr_v2.py`)**:
 
