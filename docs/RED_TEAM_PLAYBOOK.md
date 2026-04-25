@@ -165,7 +165,7 @@ exit
 | 192.168.1.14 (主) | 觸發蜜罐 port 2222 | 被 MDR 封鎖 |
 | 192.168.1.15 (備用) | 攻擊 port 9999 | 未被封鎖 |
 
-管理指令: `bash red_team/ip_switch.sh add` / `remove` / `status`
+管理指令: `bash red_team/ip_switch.sh add [IP]` / `remove [IP]` / `status`（不帶 IP 預設 192.168.1.15）
 
 > IP alias 只能繞過網路層封鎖。如果藍軍同時有開 eBPF，行為偵測照樣有效（跟 IP 無關）。
 
