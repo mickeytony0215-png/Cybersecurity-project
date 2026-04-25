@@ -30,7 +30,7 @@
 │   ├── recon.sh                #   nmap reconnaissance
 │   ├── post_exploit.sh         #   Post-exploitation enumeration
 │   ├── ip_switch.sh            #   IP alias for MDR bypass
-│   ├── deploy_agent.sh         #   Exfil agent deployment helper
+│   ├── deploy_agent.sh         #   Exfil agent deployment (HTTP, v3)
 │   ├── exfil_agent.py          #   DNS/ICMP data exfiltration agent
 │   └── exfil_listener.py       #   Exfiltration listener (attacker side)
 │
