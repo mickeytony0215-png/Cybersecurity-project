@@ -143,7 +143,7 @@ The main chain (phases 1-7) covers the full Kill Chain from reconnaissance to da
 
 ### Blue Team / 藍軍
 
-- **eBPF v1**: Hooks `memfd_create`, `execve`, and `socket` tracepoints. Correlates `memfd_create` PID with raw ICMP socket creation to confirm fileless C2. Also does a cold-start `/proc/*/exe` scan for existing `memfd:` processes. (`blue_team/blue_ebpf_mdr.py`)
+- **eBPF v1**: Hooks `memfd_create`, `execve`, and `socket` tracepoints. Correlates `memfd_create` PID with raw ICMP socket creation to confirm fileless C2. Cold-start scan checks `/proc/*/exe` for direct memfd execution AND `/proc/*/cmdline` + `/proc/*/fd/*` for Python fileless loader patterns. (`blue_team/blue_ebpf_mdr.py`)
 - **eBPF v2**: Adds `sys_enter_connect` to check destination ports against a configurable suspect list, plus `sys_enter_dup2/dup3` to track fd 0,1,2 hijacking (the classic reverse shell pattern). (`blue_team/blue_ebpf_mdr_v2.py`)
 - **Kernel-space kill**: Both versions can call `bpf_send_signal(SIGKILL)` to terminate the process *before* the syscall even completes. (`blue_team/blue_ebpf_mdr*.py`)
 

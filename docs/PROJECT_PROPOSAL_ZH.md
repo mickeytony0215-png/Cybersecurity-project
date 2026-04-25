@@ -267,7 +267,7 @@ iptables -I INPUT 1 -s <attacker_ip> -j DROP
 | Hook 2 | `sys_enter_execve` | Pattern match filename 裡的 `/proc/<pid>/fd/` — 代表從 anonymous memory exec |
 | Hook 3 | `sys_enter_socket` | 偵測 `socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)`；跟 memfd PID 做 correlation 確認 high-confidence C2 detection |
 
-開 `--kill` mode 的話，`bpf_send_signal(SIGKILL)` 會在 syscall 完成之前直接從 kernel space kill 掉惡意 process。另外，啟動的時候有個 cold-start scanner 會掃 `/proc/*/exe` 找已經在跑的 `memfd:` process。
+開 `--kill` mode 的話，`bpf_send_signal(SIGKILL)` 會在 syscall 完成之前直接從 kernel space kill 掉惡意 process。另外，啟動的時候有個 cold-start scanner 會做兩層掃描：`/proc/*/exe` 找直接 memfd 執行，以及 `/proc/*/cmdline` + `/proc/*/fd/*` 找 Python fileless loader 模式。
 
 **元件 4 — eBPF MDR v2（`blue_team/blue_ebpf_mdr_v2.py`）**：
 
