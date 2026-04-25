@@ -707,7 +707,7 @@ memfd blocked  TCP bypass      port detect      eBPF v2 偵測不到
 | eBPF v2 誤殺合法進程 | 用 `--whitelist PID1,PID2` 排除 |
 | 蜜罐 port 2222 被占用 | `sudo lsof -i :2222` 找出佔用進程 |
 | iptables 規則殘留 | `sudo bash cleanup.sh` 一鍵清除 |
-| ip_switch.sh IP 不對 | 編輯腳本中的 PRIMARY_IP 和 ALIAS_IP 變數 |
+| ip_switch.sh IP 不對 | 用第二個參數自訂：`ip_switch.sh add 192.168.1.20` |
 | 上次 demo 殘留影響本次 | `sudo bash cleanup.sh`（清除程序、iptables、log、loot、crontab） |
 | 想預覽會清什麼 | `sudo bash cleanup.sh --dry` |
 
