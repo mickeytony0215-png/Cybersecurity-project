@@ -27,6 +27,7 @@ import argparse
 import time
 import signal
 import glob as _glob
+from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════
 #  eBPF C Program
@@ -327,27 +328,88 @@ SEVERITY_FMT = {
 #  deployed the agent BEFORE the blue team started monitoring,
 #  the eBPF hooks won't catch it.
 #
-#  This scanner checks /proc/*/exe for every running process.
-#  If the exe symlink points to "memfd:*", the process is running
-#  from an anonymous in-memory file — likely fileless malware.
+#  This scanner does two cold-start checks:
+#    1. Legacy direct memfd exec: /proc/<pid>/exe -> memfd:*
+#    2. Python fileless loader pattern:
+#         execve("/usr/bin/python3", ["python3", "/proc/<pid>/fd/<N>"])
+#       In this case /proc/<pid>/exe is python3, so we must inspect
+#       cmdline and resolve the referenced fd back to a memfd target.
 #
 #  This is the "cold start" detection complement to the "hot"
 #  eBPF real-time detection.
 # ═══════════════════════════════════════════════════════════════
 
+def _read_proc_cmdline(pid: int) -> list[str]:
+    """Return argv entries for a process from /proc/<pid>/cmdline."""
+    try:
+        data = Path(f'/proc/{pid}/cmdline').read_bytes()
+    except OSError:
+        return []
+    if not data:
+        return []
+    return [part.decode(errors='replace') for part in data.split(b'\x00') if part]
+
+
+def _find_proc_fd_arg(pid: int, argv: list[str]) -> tuple[str, str] | None:
+    """Return (<arg>, <fd target>) if argv references a live memfd-backed /proc fd."""
+    prefix = f'/proc/{pid}/fd/'
+    for arg in argv[1:]:
+        if not arg.startswith(prefix):
+            continue
+        try:
+            fd_target = os.readlink(arg)
+        except OSError:
+            continue
+        if 'memfd:' in fd_target:
+            return arg, fd_target
+    return None
+
+
 def scan_existing_memfd():
-    """Walk /proc/*/exe to find processes running from memfd."""
+    """Walk /proc to find already-running fileless processes."""
     found = []
     for exe in _glob.glob('/proc/[0-9]*/exe'):
         try:
-            target = os.readlink(exe)
-            if 'memfd:' in target:
-                pid = int(exe.split('/')[2])
-                try:
-                    comm = open(f'/proc/{pid}/comm').read().strip()
-                except OSError:
-                    comm = '?'
-                found.append((pid, comm, target))
+            pid = int(exe.split('/')[2])
+            exe_target = os.readlink(exe)
+            try:
+                comm = Path(f'/proc/{pid}/comm').read_text().strip()
+            except OSError:
+                comm = '?'
+
+            if 'memfd:' in exe_target:
+                found.append({
+                    'pid': pid,
+                    'comm': comm,
+                    'reason': 'exe->memfd',
+                    'exe': exe_target,
+                    'cmdline': [],
+                    'detail': exe_target,
+                })
+                continue
+
+            argv = _read_proc_cmdline(pid)
+            if not argv:
+                continue
+
+            proc_fd = _find_proc_fd_arg(pid, argv)
+            if not proc_fd:
+                continue
+
+            argv0 = os.path.basename(argv[0])
+            exe_name = os.path.basename(exe_target)
+            if not (argv0.startswith('python') or exe_name.startswith('python')):
+                continue
+
+            proc_arg, fd_target = proc_fd
+            found.append({
+                'pid': pid,
+                'comm': comm,
+                'reason': 'python-proc-fd',
+                'exe': exe_target,
+                'cmdline': argv,
+                'detail': f'{proc_arg} -> {fd_target}',
+            })
         except OSError:
             continue
     return found
@@ -405,18 +467,22 @@ def main():
                 else '\033[93mDISABLED (monitor)\033[0m')
     print(f'  Auto-kill : {kill_str}')
 
-    # ── Scan for existing memfd processes (cold-start check) ─
+    # ── Scan for existing fileless processes (cold-start check) ─
     existing = scan_existing_memfd()
     if existing:
         print(f'\n  \033[91m[!] Found {len(existing)} existing '
-              f'memfd process(es):\033[0m')
-        for pid, comm, exe in existing:
-            print(f'      PID={pid}  COMM={comm}  EXE={exe}')
+              f'fileless process(es):\033[0m')
+        for proc in existing:
+            print(f"      PID={proc['pid']}  COMM={proc['comm']}  "
+                  f"REASON={proc['reason']}  EXE={proc['exe']}")
+            print(f"        DETAIL={proc['detail']}")
+            if proc['cmdline']:
+                print(f"        CMD={' '.join(proc['cmdline'])}")
             if args.kill:
-                os.kill(pid, signal.SIGKILL)
+                os.kill(proc['pid'], signal.SIGKILL)
                 print(f'      \033[91m  -> KILLED\033[0m')
     else:
-        print('  Existing  : no memfd processes found (clean)')
+        print('  Existing  : no fileless processes found (clean)')
 
     # ── Load & JIT-compile eBPF program ──────────────────────
     # BCC compiles the C source to eBPF bytecode using Clang/LLVM,
