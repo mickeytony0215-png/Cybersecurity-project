@@ -83,8 +83,9 @@ The defense is organized as two enforcing layers plus a monitoring plane:
 hooks security-relevant syscalls and can terminate a process in kernel
 space \emph{before} the syscall completes; and (3)~a \textbf{SOC dashboard}
 that aggregates telemetry from both layers in real time.
-We describe the exact detection logic of each eBPF hook (including the v2
-reverse-shell upgrade in \co{blue\_ebpf\_mdr\_v2.py}), the cold-start
+We describe the exact detection logic of each eBPF hook (the
+fileless-staging detections plus the \co{dup2}/\co{dup3} reverse-shell hook,
+all in \co{blue\_ebpf\_mdr\_v2.py}), the cold-start
 \co{/proc} scanner, and the kernel-space kill mechanism.
 We then give an honest evaluation: behavior-based, source-IP-agnostic
 kernel detection is far stronger than IP-based blocking, but it has real
@@ -232,11 +233,11 @@ the action; ``Alert'' = the control records it but does not stop it.}
 T1595 & Active Scanning & Honeypot (\co{honeypot.py}) & Network & Alert\\
 --    & (response)      & \co{iptables} MDR & Network & Enforce (block IP)\\
 T1190 & Exploit Public-Facing App & (not directly detected) & -- & Gap\\
-T1620 & Reflective Code Loading & \co{sys\_enter\_memfd\_create} & Kernel v1 & Alert + taint\\
-T1059 & Exec from \co{/proc/fd} & \co{sys\_enter\_execve} (argv) & Kernel v1 & Enforce (kill)\\
-T1095 & Non-App-Layer (ICMP) & \co{sys\_enter\_socket} (raw ICMP) & Kernel v1 & Enforce if correlated\\
-T1571 & Non-Standard Port & \co{sys\_enter\_connect} & Kernel v2 & Alert\\
-T1059.006 & Reverse-shell fd hijack & \co{sys\_enter\_dup2/dup3} & Kernel v2 & Enforce (kill)\\
+T1620 & Reflective Code Loading & \co{sys\_enter\_memfd\_create} & Kernel & Alert + taint\\
+T1059 & Exec from \co{/proc/fd} & \co{sys\_enter\_execve} (argv) & Kernel & Enforce (kill)\\
+T1095 & Non-App-Layer (ICMP) & \co{sys\_enter\_socket} (raw ICMP) & Kernel & Enforce if correlated\\
+T1571 & Non-Standard Port & \co{sys\_enter\_connect} & Kernel & Alert\\
+T1059.006 & Reverse-shell fd hijack & \co{sys\_enter\_dup2/dup3} & Kernel & Enforce (kill)\\
 T1048.003 & Exfil over DNS/ICMP & (not detected) & -- & Gap\\
 T1053.003 & Persistence: Cron & (not detected) & -- & Gap\\
 \bottomrule
@@ -278,8 +279,7 @@ Attacker & Red Team & recon, C2, reverse shell, exfil (out of scope here)\\
 \midrule
 \co{target/honeypot.py} & Network & Fake SSH on :2222; logs every connector IP to \co{trap.log}\\
 \co{blue\_team/blue\_mdr\_network.py} & Network & Watches \co{trap.log}; \co{iptables -j DROP} on new IPs\\
-\co{blue\_team/blue\_ebpf\_mdr.py} & Kernel & eBPF v1: memfd, execve, raw-ICMP detection + correlation\\
-\co{blue\_team/blue\_ebpf\_mdr\_v2.py} & Kernel & eBPF v2: adds connect (suspect ports) + dup2/dup3 reverse-shell\\
+\co{blue\_team/blue\_ebpf\_mdr\_v2.py} & Kernel & eBPF MDR: memfd/execve/raw-ICMP staging detection $+$ correlation, connect (suspect ports), dup2/dup3 reverse-shell\\
 \co{blue\_team/soc\_dashboard.py} & Monitoring & Flask + SSE timeline over \co{trap.log} and \co{soc\_events.jsonl}\\
 \co{cleanup.sh} & Ops & Resets processes, \co{iptables}, IP aliases, logs, crontab\\
 \bottomrule
@@ -467,8 +467,9 @@ The verifier is the reason every string scan is a bounded loop.}
 \label{fig:pipeline}
 \end{figure}
 
-\subsection{v1 detections}
-\co{blue\_ebpf\_mdr.py} installs four probes.
+\subsection{Fileless-staging detections}
+The eBPF MDR (\co{blue\_ebpf\_mdr\_v2.py}) installs seven probes in total;
+the first four target the fileless-staging chain.
 
 \paragraph{Hook 0 -- fork tracking (\co{sched\_process\_fork}).}
 When a process that previously called \co{memfd\_create} forks, the child
@@ -506,14 +507,14 @@ socket (e.g.\ \co{ping}) is \textbf{alert-only}. But if the calling PID
 \emph{or its parent} is in \co{memfd\_pids}, we have a high-confidence
 correlation -- \emph{fileless staging plus a covert ICMP channel} -- which is
 extremely unlikely to be benign, and it is \textbf{killed}. This
-multi-indicator correlation is the v1 design's strongest idea: it raises
+multi-indicator correlation is the staging detector's strongest idea: it raises
 confidence enough to justify an automated kill.
 
 \subsection{Cold-start \co{/proc} scanner}
 \label{sec:coldstart}
 eBPF tracepoints only fire on \emph{new} syscalls. If the agent was deployed
 \emph{before} the Blue Team started monitoring, the hooks never see it. The
-v1 tool compensates with a one-shot \co{/proc} walk at startup that finds
+tool compensates with a one-shot \co{/proc} walk at startup that finds
 already-running fileless processes two ways:
 \begin{enumerate}[leftmargin=1.4em]
   \item \co{/proc/<pid>/exe} resolving to \co{memfd:*} (direct memfd exec);
@@ -525,11 +526,11 @@ With \co{--kill}, matches are terminated with a userspace \co{SIGKILL}. This
 is a \emph{compensating} control: it narrows, but does not eliminate, the
 temporal gap (\S\ref{sec:gap-limits}).
 
-\subsection{v2 detections (the reverse-shell upgrade)}
-The reverse shell in the exercise uses only ordinary syscalls
+\subsection{Reverse-shell detection}
+A TCP reverse shell uses only ordinary syscalls
 (\co{socket(SOCK\_STREAM)} $\to$ \co{connect} $\to$ \co{dup2} $\to$
-\co{pty.spawn}) and therefore \emph{completely bypasses v1}.
-\co{blue\_ebpf\_mdr\_v2.py} retains all v1 hooks and adds three.
+\co{pty.spawn}), so none of the four staging hooks above fire on it. The
+remaining three hooks exist to close that gap.
 
 \paragraph{Hook 4 -- \co{connect} to a suspect port.}
 The hook reads the first 8 bytes of the \co{sockaddr} the program passed to
@@ -655,8 +656,7 @@ sudo .venv/bin/python3 target/honeypot.py
 # Lab T2 -- Layer 1 network MDR (auto-clean its rules on exit)
 sudo .venv/bin/python3 blue_team/blue_mdr_network.py --cleanup
 
-# Lab T2 -- Layer 2 kernel MDR (start v1, upgrade to v2 as needed)
-sudo .venv/bin/python3 blue_team/blue_ebpf_mdr.py --kill
+# Lab T2 -- Layer 2 kernel MDR
 sudo .venv/bin/python3 blue_team/blue_ebpf_mdr_v2.py --kill
 
 # Lab -- monitoring plane
@@ -681,15 +681,13 @@ of each round.
   \node[warn, right=4mm of o1] (o2) {L1 bypassed\\ (IP alias)};
   \node[good, right=4mm of o2] (o3) {L2 cold-start\\ \texttt{/proc} kill};
   \node[good, right=4mm of o3] (o4) {L2 live kill\\ (execve)};
-  \node[gap,  right=4mm of o4] (o5) {v1 blind\\ (no hook)};
-  \node[good, right=4mm of o5] (o6) {L2 v2 kill\\ (dup2)};
-  \node[gap,  right=4mm of o6] (o7) {full-stack gap\\ (DNS+cron)};
+  \node[good, right=4mm of o4] (o5) {L2 kill\\ (dup2/dup3)};
+  \node[gap,  right=4mm of o5] (o6) {full-stack gap\\ (DNS+cron)};
   \foreach \n/\r/\a in {o1/R1/honeypot probe, o2/R1c/IP alias,
-                         o3/R3/cold start, o4/R4/SSTI replay,
-                         o5/R5/reverse shell, o6/R6/v2 upgrade,
-                         o7/R7/persistent exfil}
+                         o3/R3/cold start, o4/R4/SSTI,
+                         o5/R5/reverse shell, o6/R6/persistent exfil}
      \node[above=2mm of \n, align=center, font=\scriptsize] {\textbf{\r}\\ \a};
-  \draw[->,thick] ([yshift=-3mm]o1.south west) -- ([yshift=-3mm]o7.south east);
+  \draw[->,thick] ([yshift=-3mm]o1.south west) -- ([yshift=-3mm]o6.south east);
 \end{tikzpicture}}
 \caption{Attack--defense rounds from the defender's side. Green = attack
 stopped; amber = a layer is bypassed (hand-off to the next layer); red = a gap
@@ -704,7 +702,7 @@ nothing in the stack closes. Time flows left to right.}
   \item \textbf{IP-alias bypass (R1c).} Attacker adds an alias IP and reaches
         :9999 again. \emph{Layer 1 is bypassed -- exactly as expected; hand
         off to Layer 2.}
-  \item \textbf{Cold-start cleanup (R3).} Blue Team starts eBPF v1
+  \item \textbf{Cold-start cleanup (R3).} Blue Team starts the eBPF MDR
         \emph{after} the agent is already running. The \co{/proc} scanner
         finds the in-memory \co{python3 /proc/<pid>/fd/<N>} agent and kills
         it; the attacker's C2 goes silent. \emph{Compensating control works.}
@@ -712,16 +710,16 @@ nothing in the stack closes. Time flows left to right.}
         chain is now killed live at the \co{execve(argv)} hook (memfd is
         tainted/alerted first), so no agent ever beacons. \emph{Layer 2 hot
         path works.}
-  \item \textbf{Reverse-shell bypass (R5).} Attacker switches to a TCP
-        reverse shell (no memfd, no raw ICMP). v1 has no matching hook and
-        \emph{stays silent}. \emph{Known v1 blind spot.}
-  \item \textbf{v2 upgrade (R6).} Blue Team swaps in v2. The shell now trips
-        \co{connect} (alert) and is killed when \co{dup2/dup3} hijacks the
-        three fds. \emph{Layer 2 upgraded; bypass closed.}
-  \item \textbf{Persistent DNS exfiltration (R7).} A \co{crontab} planted
+  \item \textbf{Reverse shell (R5).} Attacker switches to a TCP reverse
+        shell (no memfd, no raw ICMP), so the four staging hooks stay silent
+        by design. The same tool still catches it: \co{connect} raises an
+        alert, and the process is killed the moment \co{dup2/dup3} redirects
+        all three standard fds to the socket (\co{0x07}). \emph{Caught on the
+        highest-confidence signal, no version change required.}
+  \item \textbf{Persistent DNS exfiltration (R6).} A \co{crontab} planted
         earlier re-downloads an exfil agent that ships data over DNS. It uses
         only \co{socket(SOCK\_DGRAM)} + \co{sendto} -- all legitimate
-        syscalls -- so v2 raises \emph{no alert}, and the persistence
+        syscalls -- so the eBPF MDR raises \emph{no alert}, and the persistence
         survived every kill. \emph{Full-stack gap (\S\ref{sec:limits}).}
 \end{enumerate}
 
@@ -745,7 +743,7 @@ unresponsive, and a surviving crontab would re-infect the next run.
         (\co{/proc} scan kills an already-running agent) and \emph{hot}
         (\co{execve(argv)} kill, ICMP-correlation backstop) so no beacon is
         established.
-  \item \textbf{TCP reverse shell} -- stopped by v2 at the \co{dup2/dup3}
+  \item \textbf{TCP reverse shell} -- stopped at the \co{dup2/dup3}
         fd-hijack, independent of the C2 port.
 \end{itemize}
 
@@ -931,7 +929,7 @@ signal and sub-second blocking, but is reactive and trivially bypassed by an
 IP change. Layer~2 (eBPF) is the real enforcement: source-IP-agnostic,
 fileless-visible, and able to kill a process in kernel space before a
 dangerous syscall completes -- it stopped both the fileless ICMP C2 (cold and
-hot) and, after the v2 upgrade, the TCP reverse shell. Yet the same design
+hot) and the TCP reverse shell at the \co{dup2/dup3} fd-hijack. Yet the same design
 that makes it strong -- enumerating specific dangerous syscalls -- makes it
 blind to malice built from legitimate syscalls: DNS/ICMP exfiltration and a
 \co{crontab} persistence mechanism survived the entire stack. The honest
@@ -954,7 +952,6 @@ sudo .venv/bin/python3 target/honeypot.py
 sudo .venv/bin/python3 blue_team/blue_mdr_network.py --cleanup
 
 # --- Layer 2: kernel MDR ---
-sudo .venv/bin/python3 blue_team/blue_ebpf_mdr.py --kill
 sudo .venv/bin/python3 blue_team/blue_ebpf_mdr_v2.py --kill \
      --suspect-ports 4444,4445,5555,1234,1337 \
      --whitelist <pid1>,<pid2>
@@ -969,17 +966,17 @@ sudo bash cleanup.sh          # add --dry to preview
 \section{eBPF hook reference}
 \begin{center}
 \small
-\begin{tabularx}{\linewidth}{@{}l l Y@{}}
+\begin{tabularx}{\linewidth}{@{}l Y@{}}
 \toprule
-\textbf{Tracepoint} & \textbf{Version} & \textbf{Purpose}\\
+\textbf{Tracepoint} & \textbf{Purpose}\\
 \midrule
-\co{sched/sched\_process\_fork} & v1/v2 & propagate memfd taint to children\\
-\co{syscalls/sys\_enter\_memfd\_create} & v1/v2 & fileless staging (alert + taint)\\
-\co{syscalls/sys\_enter\_execve} & v1/v2 & exec from \co{/proc/fd} (kill on argv)\\
-\co{syscalls/sys\_enter\_socket} & v1/v2 & raw ICMP socket (kill if correlated)\\
-\co{syscalls/sys\_enter\_connect} & v2 & connect to suspect port (alert)\\
-\co{syscalls/sys\_enter\_dup2} & v2 & reverse-shell fd hijack (kill at 0x07)\\
-\co{syscalls/sys\_enter\_dup3} & v2 & dup3 variant of the above (kill at 0x07)\\
+\co{sched/sched\_process\_fork} & propagate memfd taint to children\\
+\co{syscalls/sys\_enter\_memfd\_create} & fileless staging (alert + taint)\\
+\co{syscalls/sys\_enter\_execve} & exec from \co{/proc/fd} (kill on argv)\\
+\co{syscalls/sys\_enter\_socket} & raw ICMP socket (kill if correlated)\\
+\co{syscalls/sys\_enter\_connect} & connect to suspect port (alert)\\
+\co{syscalls/sys\_enter\_dup2} & reverse-shell fd hijack (kill at 0x07)\\
+\co{syscalls/sys\_enter\_dup3} & dup3 variant of the above (kill at 0x07)\\
 \bottomrule
 \end{tabularx}
 \end{center}
