@@ -5,8 +5,8 @@
 **Emphasis:** honeypot and eBPF — code and functionality
 **Narrative arc (起承轉合):** Setup → Development → Turn → Resolution
 
-> Slide text and speaker script are both in English. "Screenshot / Visual" tells you
-> exactly what to capture (code lines or a report figure).
+> 投影片文字維持英文；下方的「Speaker script（講稿）」為中文口語稿。
+> 「Screenshot / Visual」標明該擷取的畫面（程式碼行數或報告圖表）。
 
 ---
 
@@ -37,8 +37,8 @@
 - Group 6 · members · date
 
 **Speaker script**
-> "Our attack report already broke into the target end-to-end. Today I take the
-> defender's seat and show how we detect and respond to each of those behaviors."
+> 「我們的攻擊報告已經把目標從頭到尾完整攻破。今天我換到防守方的位置，
+> 示範我們如何偵測、並即時回應這些行為中的每一個。」
 
 ---
 
@@ -50,9 +50,9 @@
 - Two principles: **Behavior over signature** · **Defense in depth**
 
 **Speaker script**
-> "The attacker has root, and the payload is *fileless* — nothing on disk to scan,
-> and one source-IP change defeats any IP block. So we don't bet on a single wall.
-> We bet on layering, and on watching *what a process does*, not who it is."
+> 「攻擊者已經拿到 root，而且 payload 是*無檔案（fileless）*的——磁碟上沒有東西
+> 可以掃描，來源 IP 換一個就破解了任何 IP 封鎖。所以我們不把賭注押在單一道牆上，
+> 而是押在分層防禦，以及監看*一個行程在做什麼*，而不是它是誰。」
 
 **Screenshot / Visual**
 - Report §2.1 "attacker behaviors" list, or the red-team report §4 kill-chain table
@@ -68,9 +68,9 @@
 - **SOC dashboard:** monitoring plane (watch only, no enforcement)
 
 **Speaker script**
-> "Ordering matters. Layer 1 is cheap, gives the earliest signal, but is trivially
-> bypassed. Layer 2 is the real enforcement point — it acts on behavior the attacker
-> can't avoid if they want code execution and a control channel."
+> 「層次的順序很重要。第一層成本低、能給出最早的訊號，但很容易被繞過；
+> 第二層才是真正的執法點——它針對的是攻擊者只要想執行程式碼、想要一條控制
+> 通道，就無法避免的行為。」
 
 **Screenshot / Visual**
 - Report **Figure "Defense-in-depth"** (§2.2 — the three-band + SOC TikZ diagram).
@@ -85,9 +85,9 @@
 - Every hit appended to `trap.log` (IP / port / first 100 bytes) — the contract with the MDR
 
 **Speaker script**
-> "The honeypot's value is clean signal: high confidence, low noise. We answer with a
-> version string identical to real OpenSSH, so a scanner is drawn in — and anything that
-> connects gets logged to trap.log with its IP."
+> 「蜜罐的價值在於乾淨的訊號：高可信度、低雜訊。我們回應一個跟真實 OpenSSH
+> 完全相同的版本字串，把掃描器引誘進來——任何連進來的東西，都會連同它的 IP
+> 一起被記到 trap.log。」
 
 **Screenshot / Visual** — code: `target/honeypot.py`
 - **L30–36** — `SSH_BANNER` / `FAKE_RESPONSE`
@@ -103,9 +103,9 @@
 - Fatal weakness: it blocks the **source IP**, and the source IP is attacker-controlled
 
 **Speaker script**
-> "A new IP shows up, and in under a second we insert a top-priority DROP across every
-> port. But that's also its undoing — it blocks the source IP, and on the next slide the
-> attacker defeats it with a single alias." *(plants the seed for the Turn)*
+> 「一個新 IP 出現，我們在不到一秒內就插入一條最高優先權、跨所有連接埠的 DROP
+> 規則。但這也正是它的罩門——它封的是來源 IP，而下一張投影片裡，攻擊者只要加
+> 一個別名 IP 就破解了。」*（為「轉折」埋下伏筆）*
 
 **Screenshot / Visual** — code: `blue_team/blue_mdr_network.py`
 - **L47–52** — `block_ip()` (the `iptables` command)
@@ -122,9 +122,9 @@
 - **Low overhead** — JIT-compiled to native code, O(1) hash-map lookups
 
 **Speaker script**
-> "eBPF lets us run a kernel-verified program inside the kernel, attached to syscall
-> entry points. It ignores IPs and file hashes — it only sees what a process is doing,
-> and it can kill it *before* the dangerous action actually happens."
+> 「eBPF 讓我們在核心裡跑一支經過核心驗證的程式，掛在系統呼叫的進入點上。
+> 它不看 IP、也不看檔案雜湊——它只看一個行程正在做什麼，而且可以在危險動作
+> 真正發生*之前*，就把它殺掉。」
 
 **Screenshot / Visual**
 - Report **Figure "eBPF pipeline"** (C → BCC → bytecode → verifier → JIT → tracepoint → perf buffer).
@@ -141,9 +141,9 @@
 - Design: enforce only on the **highest-confidence** signal
 
 **Speaker script**
-> "Fileless staging means memfd creates an in-memory file, then `/proc/fd` executes it.
-> We don't kill on memfd — it has legitimate users. We kill at `execve` when we see the
-> `/proc/fd` pattern in argv, and we keep a memfd+raw-ICMP correlation as a backstop."
+> 「無檔案的佈署手法是：memfd 先建立一個記憶體裡的檔案，再透過 `/proc/fd` 執行它。
+> 我們不在 memfd 階段下手——它有合法用途。我們是在 `execve` 看到 argv 裡出現
+> `/proc/fd` 這個樣式時才殺，並保留 memfd 加上 raw ICMP 的關聯偵測當作後備。」
 
 **Screenshot / Visual** — code: `blue_team/blue_ebpf_mdr_v2.py`
 - **L106–116** — memfd hook (`__KILL_MEMFD__` is empty = alert-only)
@@ -162,9 +162,9 @@
 - Kill = `bpf_send_signal(9)`, in-kernel, *before* the syscall completes (no userspace race)
 
 **Speaker script**
-> "A reverse shell wires stdin, stdout and stderr to one socket. We track that as a
-> bitmask — the moment all three bits hit `0x07`, we fire `bpf_send_signal` and kill it,
-> before the syscall even completes, and regardless of which port it used."
+> 「反向 shell 會把 stdin、stdout、stderr 三者都接到同一個 socket。我們用一個 bitmask
+> 來追蹤——當三個位元同時湊滿 `0x07` 的那一刻，我們就觸發 `bpf_send_signal` 把它殺掉，
+> 在系統呼叫還沒完成之前，而且不管它用的是哪個連接埠。」
 
 **Screenshot / Visual**
 - **Figure:** report **"Reverse-shell bitmask state machine"** (`000 → 001 → 011 → 111 → SIGKILL`) — best climax visual
@@ -184,10 +184,9 @@
 - **Root cause remains** — SSTI + running as root are never fixed
 
 **Speaker script**
-> "Here's the honest part. We're strong, but three things walk through the whole stack:
-> an IP swap defeats Layer 1, exfil built from *good* syscalls is invisible to eBPF, and
-> cron persistence survives every kill. And one false positive turns our own detector
-> into the outage."
+> 「接下來是誠實的部分。我們很強，但有三件事能穿過整個防禦堆疊：換個 IP 就破解
+> 第一層、用*良性*系統呼叫組成的外洩對 eBPF 完全隱形、而 cron 的常駐機制能熬過
+> 每一次擊殺。而且只要一次誤判，我們自己的偵測器就會變成一場服務中斷。」
 
 **Screenshot / Visual**
 - Report **Table 2** — the `Gap` rows (T1190 / T1048.003 / T1053.003), or the **"attack-defense rounds"** figure with its red gap boxes.
@@ -203,10 +202,9 @@
 - Fix the **root cause** — patch the SSTI, drop root, add a WAF so Layer 2 is a backstop, not the only wall
 
 **Speaker script**
-> "Every gap has an answer: exfil needs a DNS-analytics sensor, not a syscall hook;
-> persistence needs eradication; auto-kill should be score-gated to cut false positives;
-> and above all, fix the SSTI and drop root so the kernel layer is a backstop, not the
-> last line of defense."
+> 「每個缺口都有對策：外洩需要的是 DNS 流量分析感測器，而不是系統呼叫 hook；
+> 常駐機制需要的是徹底根除；自動擊殺應該用分數門檻來把關，以降低誤判；而最重要
+> 的是修掉 SSTI、卸掉 root 權限，讓核心層是一道後備防線，而不是最後一道防線。」
 
 ---
 
@@ -217,9 +215,8 @@
 - Each layer is expected to fail against some class of attack → security is making sure the **next layer / next sensor is already watching the gap**
 
 **Speaker script**
-> "The takeaway is one line: defense-in-depth is a continuous process, not a finished
-> product. Every layer gets bypassed by something — what matters is whether the next one
-> is already watching that gap."
+> 「一句話總結：縱深防禦是一個持續的過程，不是一個完成的產品。每一層都會被某種
+> 攻擊繞過——真正重要的是，下一層是不是已經在盯著那個缺口。」
 
 **Screenshot / Visual (optional)**
 - Report **"attack-defense rounds"** figure (green / amber / red) as a full-picture closer.
