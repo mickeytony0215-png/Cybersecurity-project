@@ -332,6 +332,41 @@
 | 「DNS 外洩為什麼漏？」 | 只用合法 syscall（`socket SOCK_DGRAM`+`sendto`），syscall 列舉式偵測本質看不到 → 要 egress/DNS 分析。 | S8/S9 |
 | 「cold start（防禦比攻擊晚開）呢？」 | `/proc` 掃描器補抓已在跑的 `python3 /proc/<pid>/fd/<N>` agent。 | S6 |
 | 「IP 封鎖能擋多久？」 | 設計上預期被 alias 繞過（Project 1 就這樣破的）；任務是給訊號買時間，真正攔截在行為層。 | S4/S2 |
+| 「reverse shell 怎麼用 `dup2` 抓出來？」 | 任何 reverse shell 都要把 stdin/stdout/stderr 三個 fd 接到同一條 socket；對每行程記 3-bit bitmask，湊滿 `0x07` 就確認、就 kill。 | S7 |
+| 「正常程式也會用 `dup2`，不會誤判嗎？」 | 要同一行程把 fd 0/1/2 三個都劫持湊滿 `0x07` 才殺，正常程式極少這樣；且預設 monitor 先驗證，無誤判才切 enforce。 | S7 |
+| 「為什麼把 kill 編成兩份，不用執行期旗標？」 | `bpf_send_signal(9)` 送的是 SIGKILL，殺了回不來；monitor 那份根本沒把 kill 那行編進去，從源頭杜絕誤殺，驗證後才切 `--kill`。 | S7 |
+| 「攻擊者改用 `dup3` 或走 80/443 不就繞過？」 | `dup3` 已一起掛（Python `inheritable=False` 其實就是呼叫 `dup3`）；判斷看行為不看 port，走 80/443 照擋。 | S7 |
+
+### 每頁可能問題速查（S0–S10 逐頁）
+
+> 上表是跨頁高頻追問；這張按投影片順序逐頁列，報告時可對頁速查。S7 另有專節「S7 reverse-shell 深入備答」。
+
+| 頁 | 可能被問 | 一句話回答 |
+|---|---|---|
+| S1 | 你們不是攻擊方嗎，怎麼防自己？ | 同一條 Project 1 攻擊鏈，這次站防守方、沿鏈把缺的 kernel 層補上。 |
+| S1 | 怎麼確定那次「只有網路層在線」？ | Project 1 報告 §1.3/§2.3/§6.1 明寫 eBPF out of scope；網路層被繞過後 SSTI 之後全暢通。 |
+| S1 | 攻擊者為何一開始就是 root？ | `:9999` 服務本身用 root 跑，SSTI 打進來直接繼承 root（S9 列為降權 hardening）。 |
+| S2 | 為什麼有些階段只 alert、不 enforce？ | 入口 SSTI 屬應用層、DNS exfil 走合法 syscall，誠實標為 gap；只在最高可信度行為才 enforce。 |
+| S2 | 只有兩層夠嗎？ | 不是「夠」，是縱深：每層都會被某階段繞過，重點是下一層已經在盯著。 |
+| S3 | 蜜罐會被識破嗎？ | banner 是 byte-for-byte 真 OpenSSH 版本字串，`nmap -sV` 分不出真假。 |
+| S3 | 為什麼蜜罐誤報這麼低？ | `:2222` 沒有正常用途，任何連線幾乎都是攻擊者踩點 → 訊號乾淨。 |
+| S4 | `iptables` 為什麼插在 `INPUT 1`？ | 插第一條＝最高優先，< 1 秒切斷該 IP 的所有 port。 |
+| S4 | 被 alias IP 繞過不就失敗了？ | 設計上預期：封的是攻擊者可控的來源 IP，它的任務是買時間，真正攔截在行為層。 |
+| S4 | 為什麼不直接封整個網段？ | 會誤傷正常主機（self-DoS），所以只精準封單一來源 IP。 |
+| S5 | eBPF 會拖慢系統嗎？ | 經 verifier 驗證、JIT 編成原生碼、O(1) hash map 查找，負擔很低。 |
+| S5 | 為什麼磁碟掃不到、eBPF 看得到？ | fileless 在記憶體，但 `memfd_create`/`execve` 的 syscall 參數一定經過 kernel。 |
+| S6 | 為什麼 `memfd` 不直接殺？ | `memfd` 有正常用途，先 taint，等高可信度的 `execve /proc/fd` 再殺，降誤判。 |
+| S6 | taint 怎麼傳到子行程？ | `fork` hook 把父行程的 taint 繼承給 fork 出來的子行程。 |
+| S6 | ICMP C2 內容加密了怎麼抓？ | 不看內容（AES-CTR 看不到），看行為：raw ICMP socket ＋ `memfd` taint 關聯才殺。 |
+| S6 | 防禦比 agent 晚啟動（cold start）呢？ | 一支 `/proc` 掃描器補抓已經在跑的 `python3 /proc/<pid>/fd/<N>` agent。 |
+| S7 | reverse shell 怎麼抓 / 為何編兩份？ | 3-bit bitmask 湊滿 `0x07` 確認 reverse shell；kill 編兩份杜絕誤殺 — **詳見下方「S7 深入備答」**。 |
+| S8 | coverage 表為什麼還留 Gap？ | 誠實標註：SSTI（應用層）、DNS exfil（合法 syscall）是這套守不到的，交給 S9。 |
+| S8 | enforce 的判斷依據是什麼？ | 只在最高可信度行為殺：`execve /proc/fd`、ICMP ＋ memfd 關聯、`dup2` 湊 `0x07`。 |
+| S9 | egress 為什麼要「另一種」感測器？ | 藏在合法 syscall 裡的外洩，syscall 列舉式偵測本質看不到 → 要從出站流量看 DNS 量／entropy。 |
+| S9 | 降權降的是誰的權限？ | 降我們自己 `:9999` 服務（原本 root），改非 root 帳號 ＋ `NoNewPrivileges` → RCE 也只拿到低權 shell。 |
+| S9 | 多訊號評分怎麼降誤判？ | `connect` ＋ `dup2` ＋ 新 socket 關聯算信心分，高分才 kill、否則 quarantine。 |
+| S10 | 這套防禦最大的限制是什麼？ | 它是 syscall 列舉式偵測，看不到合法 syscall 內的惡意（DNS exfil），且入口 SSTI 未擋。 |
+| S10 | 為什麼說縱深是「持續的過程」？ | 每層都會被某階段繞過，安全＝確保下一層、下一個感測器已經在盯著它。 |
 
 ### 術語 / 工具 一句話備答（被問到名詞時直接念）
 
@@ -373,6 +408,59 @@
 | quarantine（隔離） | 分數不夠高時不殺，先凍結 / 限制該行程，留人工確認。 |
 | defense-in-depth（縱深防禦） | 多層防禦，每層守不同階段；假設每層都會被某些攻擊繞過，靠下一層補上。 |
 | self-DoS / false positive | 誤判；偵測器若誤殺正常行程，等於自己造成服務中斷 → 所以要 monitor 先行 ＋ 評分。 |
+
+---
+
+### S7 reverse-shell 深入備答（三張圖 / 程式碼逐點，被追問時用）
+
+> 對應 S7、報告 `fig:dup2` 與「Hook 5/6 — dup2/dup3 fd-hijack」一節、程式碼 `blue_team/blue_ebpf_mdr_v2.py` L279–300（圖②執行期）/ L452–466（圖③載入期）。
+
+**先記這句核心**：任何 reverse shell 都得把 stdin(0)/stdout(1)/stderr(2) 三個標準 fd 都接到同一條 socket，才拿得到互動式 shell。我們對每個行程記一個 3-bit 的 bitmask，記哪幾個 fd 被 `dup2` 接走，三個全亮（`0x07`）就確認、就殺。**看行為、不看 port。**
+
+#### 圖①｜bitmask 狀態機（`fig:dup2`：`000 → 001 → 011 → 111 → SIGKILL`）
+
+| 追問 | 一句話回答 |
+|---|---|
+| 為什麼用 3 個 bit？ | fd 0/1/2 各對一個 bit：bit0=stdin、bit1=stdout、bit2=stderr。 |
+| 為什麼門檻是 `0x07`？ | `0x07 = 0b111`，三個 bit 全亮＝三個標準 fd 都被接走＝reverse shell 的充分特徵。 |
+| `000→001→011→111` 是固定順序嗎？ | 不是。圖照 0→1→2 畫只是示意；實際哪個 fd 先被接無所謂，bitmask 用 OR 累積，最終湊滿 `111` 即可。 |
+| 為什麼只追 fd 0/1/2？ | 只有標準輸出入被劫持才構成互動 shell；其餘 fd 是雜訊，程式碼第一行 `if (newfd > 2) return 0;` 就濾掉。 |
+
+#### 圖②｜執行期偵測（`sys_enter_dup2`，L279–300）
+
+- `TRACEPOINT_PROBE(syscalls, sys_enter_dup2)` — hook 掛在 `dup2` 系統呼叫的**進入點**，危險動作完成前就先看到。
+- `if (newfd > 2) return 0;` — 雜訊過濾，只留 stdin/stdout/stderr。
+- `is_whitelisted(e.pid)` — 白名單行程直接放行，避免誤判已知正常程式。
+- `dup2_tracker.lookup / update` — `dup2_tracker` 是一張 **per-PID 的 BPF hash map**，每個行程各存自己的 bitmask；O(1) 查表、在 kernel 內就地更新。
+- `new_mask |= (1 << newfd);` — 把這次被接走的 fd 對應的 bit **設起來**（OR 累積，重複接同一個 fd 不會多算）。
+- `if (new_mask == 0x07)` — 三個 bit 全亮才進確認區。
+- `__KILL_DUP2__` — **確認點故意留空（佔位符），這裡沒有寫死「殺」的動作**；殺不殺由圖③在載入期決定。
+- `dup2_tracker.delete(&e.pid)` — 確認後清掉該 PID 的狀態。
+
+#### 圖③｜載入期注入（L452–466，`--kill` vs monitor）
+
+- 機制：載入 BPF 前，對同一份 C source 做**字串替換**。`--kill` 時 `kill_stmt = 'e.killed = 1; bpf_send_signal(9);'` 填進 `__KILL_DUP2__`/`__KILL_DUP3__`；monitor（預設、不加 `--kill`）時全部換成空字串。
+- `bpf_send_signal(9)` — eBPF 內建函式，在 kernel 內對當前行程送 **signal 9 = SIGKILL**（強制終止、攔不住）。
+- **為什麼編兩份、不用執行期 `if` 旗標？** — `bpf_send_signal(9)` 殺了就回不來，誤判＝殺到正常行程。用旗標的話「kill 那行」始終在程式裡、只靠條件擋，旗標判斷一錯就誤殺；編兩份時 **monitor 那份根本沒把 kill 那行編進去**，從源頭不可能誤殺。
+- **為什麼 `else` 分支一定要存在？** — `__KILL_*__` 這些標記**本身不是合法 C**，只要有一個沒被換掉就編譯不過；所以 monitor 模式不能「跳過」，`else` 必須把每個殺點都換成空字串，才編得出一份合法、但完全不帶 kill 的程式。
+- 實務流程：先跑 monitor 確認偵測無誤判 → 再切 `--kill` enforce。兩份偵測邏輯完全一樣，差別只在 kill 那行有沒有被編進去。
+- 精準度補充：`--kill` 模式下也只有 `execve`/`ICMP_CORR`/`dup2`/`dup3` 真的填殺；`memfd`/`connect` 仍替換成空字串（alert-only）→ 只在最高可信度訊號上 enforce。
+
+#### 收尾兩個常見追問
+
+| 追問 | 一句話回答 |
+|---|---|
+| 「正常程式也用 `dup2`，不會誤判？」 | 單一次 `dup2` 不會殺；要同一行程把 fd 0/1/2 **三個都**接走、湊滿 `0x07` 才確認，正常程式極少這樣；且預設 monitor 先驗證、無誤判才 enforce。 |
+| 「改用 `dup3` 或走 80/443 不就繞過？」 | `dup3` 已一起掛（`sys_enter_dup3`，同一套偵測）；Python `os.dup2(..., inheritable=False)` 實際就是呼叫 `dup3`。判斷看行為不看 port，走 80/443 照擋。 |
+
+#### 新增術語（接前面術語表，被點名詞時直接念）
+
+| 術語 | 一句話解釋 |
+|---|---|
+| `dup2` / `dup3` | 複製 file descriptor 的系統呼叫；reverse shell 用它把 stdin/stdout/stderr 接到 socket。`dup3` 多一個 flags 參數（如 `O_CLOEXEC`）。 |
+| bitmask / `0x07` | 用一個整數的每個 bit 當旗標；`0x07 = 0b111` 代表 fd 0/1/2 三個都被劫持。 |
+| 佔位符 / load-time injection（`__KILL_*__`） | C source 裡預留的空位，載入前用字串替換決定填「殺」或「空」，產出 monitor / enforce 兩種編譯結果。 |
+| BPF hash map（per-PID） | kernel 內的鍵值表，以 PID 為鍵存每個行程的狀態（這裡是 dup2 bitmask）；O(1) 查找。 |
 
 ---
 
