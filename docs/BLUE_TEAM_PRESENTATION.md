@@ -108,7 +108,7 @@
 > 接下來幾頁，就是照這張表，一階段一階段帶你看。」
 
 **Screenshot / Visual**
-- Report **Table 2 「Detection-and-response coverage」(`tab:coverage`)** — 這張表就是這頁的母本。
+- Report **Table 1 「Detection-and-response coverage」(`tab:coverage`)** — 這張表就是這頁的母本。
 - 搭配 Report **Figure「Defense-in-depth」(`fig:did`)** 當左右並陳。
 
 ---
@@ -254,7 +254,7 @@
 > 而且最根本的——SSTI 跟用 root 跑，我們從頭到尾都沒修。」
 
 **Screenshot / Visual**
-- Report **Table 2 (`tab:coverage`)** 的三個 **Gap** 列（T1190 / T1048.003 / T1053.003）反白標紅。
+- Report **Table 1 (`tab:coverage`)** 的三個 **Gap** 列（T1190 / T1048.003 / T1053.003）反白標紅。
 - 或 Report **Figure「attack–defense rounds」(`fig:rounds`)** 最右邊的紅色 `full-stack gap (DNS+cron)` 區塊。
 
 ---
@@ -328,7 +328,7 @@
 | Slide | Asset | Section / label |
 |---|---|---|
 | S1 | Red-team kill-chain table (attack stages) | red-team report §4 |
-| S2 / S8 | Table 2 「Detection coverage」(the kill-chain ↔ control map) | `tab:coverage` |
+| S2 / S8 | Table 1 「Detection coverage」(the kill-chain ↔ control map) | `tab:coverage` |
 | S2 | Figure「Defense-in-depth」 | `fig:did` |
 | S5 | Figure「eBPF pipeline」 | `fig:pipeline` |
 | S7 | Figure「Reverse-shell bitmask state machine」 | `fig:dup2` |
