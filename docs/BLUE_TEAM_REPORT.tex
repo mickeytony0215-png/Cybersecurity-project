@@ -203,7 +203,7 @@ The controls form two enforcing layers under one monitoring plane
   >={Latex[length=2.4mm]}]
   \node[band, fill=red!8] (atk)
         {\textbf{Attacker}\\[1pt]\footnotesize recon $\cdot$ SSTI $\cdot$
-         fileless C2 $\cdot$ reverse shell $\cdot$ exfil};
+         fileless ICMP C2 $\cdot$ exfil};
   \node[band, fill=blue!10, below=6mm of atk] (l1)
         {\textbf{Layer 1 -- Network:} honeypot $+$ \texttt{iptables} MDR\\[1pt]
          \footnotesize blocks known-bad \emph{source IPs} (reactive, bypassable)};
@@ -289,7 +289,7 @@ machine} runs the red-team tooling. Only the lab machine needs eBPF and root.
 \textbf{Machine} & \textbf{Role} & \textbf{Runs}\\
 \midrule
 Lab & Target + Blue Team & target app, honeypot, eBPF MDR, network MDR, SOC dashboard\\
-Attacker & Red Team & recon, C2, reverse shell, exfil (out of scope here)\\
+Attacker & Red Team & recon, C2, exfil (out of scope here)\\
 \bottomrule
 \end{tabularx}
 \end{center}
