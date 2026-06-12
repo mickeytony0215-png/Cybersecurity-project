@@ -37,9 +37,9 @@
 | 5 | Why eBPF — re-taking control after the bypass | **Development (承)** | (SSTI → Install setup) | 0:45 | 4:45 |
 | 6 | eBPF: killing the fileless ICMP C2 (code) | **Development — climax (承)** | Install + C2 (Project 1's actual C2) | 1:45 | 6:30 |
 | 7 | eBPF: the anticipated reverse-shell evasion (code) | **Development (承)** | C2 evasion *(beyond Project 1)* | 1:15 | 7:45 |
-| 8 | Where the chain still gets through | **Turn (轉)** | Exploit (SSTI) + Exfiltration (gaps) | 1:15 | 9:00 |
-| 9 | Lessons & hardening | **Resolution (合)** | (close the gaps) | 0:45 | 9:45 |
-| 10 | Closing | **Resolution (合)** | — | 0:15 | 10:00 |
+| 8 | Defense scoreboard — stages we took control of | **Turn (轉)** | (recap of enforced stages) | 1:15 | 9:00 |
+| 9 | Future Work — the next layers to add | **Resolution (合)** | (future work) | 0:45 | 9:45 |
+| 10 | Conclusion | **Resolution (合)** | — | 0:30 | 10:15 |
 
 > Core slides S3–S7 (~5.5 min) are all honeypot + eBPF. S6 (the fileless ICMP C2) is the climax because it is
 > **the exact C2 Project 1 ran** and the first stage where the kernel layer re-takes control after the network bypass.
@@ -279,12 +279,12 @@
 
 ---
 
-## S9 — Resolution (合): Hardening roadmap — the layers we'd add next (0:45)
+## S9 — Resolution (合): Future Work — the next layers to add (0:45)
 
 **Slide**
 - **Egress sensor →** enumerating "bad" syscalls can't see malice in "good" ones → add a **different sensor**: egress/DNS analytics (entropy, query volume), not another syscall hook
 - **App-layer fix →** patch the template injection + put a **WAF** in front of `:9999` → the kernel layer stays a **backstop, not the only barrier**
-- **Drop root →** the **`:9999` service itself** ran as root, so the SSTI RCE inherited root → run it under a **dedicated unprivileged account** (systemd `User=` / `NoNewPrivileges` / drop capabilities) so any RCE lands non-root — shrinking every downstream stage's blast radius
+- **Drop root →** the `:9999` **service** ran as root → run it under a **least-privilege account** so any RCE lands non-root, shrinking the blast radius
 - **Confidence scoring →** move from single-signal kills to **scoring** (correlate `connect` + `dup2` + new-socket) → auto-kill only on high scores, else **quarantine**
 
 **Speaker script**
@@ -299,18 +299,23 @@
 
 ---
 
-## S10 — Resolution (合): Closing (0:15)
+## S10 — Resolution (合): Conclusion (0:30)
 
 **Slide**
-- **Project 1 succeeded because only one layer was live, and it was bypassable.**
-- Defense-in-depth is a continuous process: every layer is expected to fail against some phase → security is making sure **the next layer is already watching that phase**.
+- **What we built:** a behavior-based, source-IP-agnostic two-layer defense — network deception + auto-block, and an **eBPF kernel MDR** that kills in kernel space **before the syscall completes**.
+- **What it achieved:** re-took control of Project 1's kill chain at **Install / C2** — the fileless C2 **died before it beaconed**, and the anticipated reverse-shell evasion is covered.
+- **The principle:** defense-in-depth is a continuous process — every layer fails against some phase; security is making sure the **next layer is already watching it**.
+- **Next:** egress analytics · WAF + least-privilege · multi-signal scoring → push the depth one layer further.
 
 **Speaker script**
-> 「Project 1 會被打穿，說到底就是那次只有一層在線上，而且那層能被繞過。縱深防禦是一個持續的過程——
-> kill chain 上每一層都會被某個階段繞掉，真正重要的是下一層、下一個感測器，有沒有已經在盯著那個階段。」
+> 「總結一下。我們做的是一套行為導向的兩層防禦:網路層的誘捕加自動封鎖,還有 kernel 層的 eBPF MDR——它能在
+> syscall 完成之前,直接在核心裡把行程殺掉。它在 Project 1 那條鏈的 Install 跟 C2 把控制權接回來,把那條
+> fileless C2 殺在 beacon 之前,連攻擊者下一步的 reverse shell 也先備好。
+> 核心觀念是:縱深防禦是一個持續的過程——每一層都會被某個階段繞掉,真正重要的是下一層、下一個感測器,有沒有
+> 已經在盯著它。接下來我們會再往外推一層:egress 分析、WAF 加降權、還有多訊號評分。謝謝。」
 
 **Screenshot / Visual (optional)**
-- Report **「attack–defense rounds」(`fig:rounds`)** 當收尾全景（綠 / 琥珀 / 紅）。
+- 收尾全景:Report **Defense-in-depth 圖(`fig:did`)** 的兩層架構(較正向),或 **attack–defense rounds(`fig:rounds`)**(綠/琥珀/紅,較完整)。
 
 ---
 
@@ -327,6 +332,47 @@
 | 「DNS 外洩為什麼漏？」 | 只用合法 syscall（`socket SOCK_DGRAM`+`sendto`），syscall 列舉式偵測本質看不到 → 要 egress/DNS 分析。 | S8/S9 |
 | 「cold start（防禦比攻擊晚開）呢？」 | `/proc` 掃描器補抓已在跑的 `python3 /proc/<pid>/fd/<N>` agent。 | S6 |
 | 「IP 封鎖能擋多久？」 | 設計上預期被 alias 繞過（Project 1 就這樣破的）；任務是給訊號買時間，真正攔截在行為層。 | S4/S2 |
+
+### 術語 / 工具 一句話備答（被問到名詞時直接念）
+
+**防禦側（工具 / 機制）**
+
+| 術語 | 一句話解釋 |
+|---|---|
+| Honeypot（蜜罐） | 沒有正常用途的假服務（我們的假 SSH `:2222`）；任何連線幾乎都是攻擊者踩點 → 訊號乾淨。 |
+| eBPF | 把小程式安全載進 Linux kernel、掛在 syscall 等事件上的技術；經 verifier 驗證、JIT 編成原生碼，低負擔。 |
+| BCC | 把 eBPF 的 C 程式在啟動時編譯、載入 kernel 的工具鏈（我們用的）。 |
+| MDR（Managed Detection & Response） | 偵測到威脅就自動回應 —— 網路層自動封 IP、kernel 層自動 kill。 |
+| tracepoint / `sys_enter_*` | kernel 在每個 syscall「進入點」提供的掛載點；hook 在這裡能在危險動作完成前就攔。 |
+| `bpf_send_signal(9)` | eBPF 內建函式，在 kernel 內對行程送 signal 9（SIGKILL，強制終止）。 |
+| taint（污染標記） | 把可疑行程連同它 fork 的子行程標記起來，等高可信度行為出現再一起處置。 |
+| SOC dashboard | 把兩層的告警 / 事件即時彙整顯示的監控台（Flask + SSE）。 |
+
+**攻擊側術語**
+
+| 術語 | 一句話解釋 |
+|---|---|
+| Cyber Kill Chain | Lockheed Martin 的攻擊七階段模型（偵察→…→行動）；我們拿它當防禦骨架。 |
+| MITRE ATT&CK / T-number | 攻擊技術的標準分類編號（如 T1190 = SSTI），讓攻防對得上同一套語言。 |
+| SSTI（Server-Side Template Injection） | 把惡意輸入塞進伺服器端模板引擎（Flask/Jinja2），被當程式碼執行 → RCE。 |
+| RCE | 遠端任意程式碼執行（Remote Code Execution）。 |
+| fileless / `memfd_create` | 在記憶體開匿名檔、寫入 payload、直接從 `/proc/<pid>/fd` 執行；磁碟看不到檔 → 躲檔案掃描。 |
+| C2 / beacon | C2＝受害機回連攻擊者的控制通道；beacon＝定期回報「活著、等指令」。Project 1 走 ICMP。 |
+| reverse shell | 受害機主動連回攻擊者，把 shell 的 stdin/stdout/stderr 接到那條連線 → 攻擊者拿到互動式命令列。 |
+| DNS exfiltration | 把要偷的資料編碼塞進 DNS 查詢的子網域送出；用的是合法 DNS 流量，難擋。 |
+| AES-CTR | 對稱加密的串流模式；Project 1 的 C2 內容用它加密，所以防禦只能看行為、看不到內容。 |
+
+**Future work / 其他**
+
+| 術語 | 一句話解釋 |
+|---|---|
+| egress 分析（egress / DNS analytics） | 從「出站流量」這側偵測（不看 syscall）：看 DNS 查詢量、子網域長度 / 亂度（entropy），抓 DNS 外洩。 |
+| WAF（Web Application Firewall） | 擋在 web 服務前的應用層防火牆，過濾 SSTI / SQLi 這類注入，把攻擊擋在入口。 |
+| 降權 / least privilege | 服務改用非 root 專用帳號、拿掉多餘 capabilities（systemd `User=`、`NoNewPrivileges`）；被 RCE 也只拿到低權限 shell。 |
+| 多訊號評分（scoring / correlation） | 不靠單一訊號就殺，把 `connect`＋`dup2`＋新 socket 等跡象關聯算信心分數，分數高才 kill、否則隔離 → 降誤殺。 |
+| quarantine（隔離） | 分數不夠高時不殺，先凍結 / 限制該行程，留人工確認。 |
+| defense-in-depth（縱深防禦） | 多層防禦，每層守不同階段；假設每層都會被某些攻擊繞過，靠下一層補上。 |
+| self-DoS / false positive | 誤判；偵測器若誤殺正常行程，等於自己造成服務中斷 → 所以要 monitor 先行 ＋ 評分。 |
 
 ---
 

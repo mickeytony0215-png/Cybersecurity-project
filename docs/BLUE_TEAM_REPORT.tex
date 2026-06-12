@@ -588,9 +588,9 @@ Figure~\ref{fig:dup2} shows this as a per-PID bitmask state machine.
   \node[st, right=16mm of s1] (s2) {011};
   \node[st, fill=green!15, right=16mm of s2] (s3) {111};
   \node[draw, rounded corners, fill=red!15, right=14mm of s3] (kill) {SIGKILL};
-  \draw[->] (s0) -- node[above,font=\scriptsize]{dup2($\cdot$,0)} (s1);
-  \draw[->] (s1) -- node[above,font=\scriptsize]{dup2($\cdot$,1)} (s2);
-  \draw[->] (s2) -- node[above,font=\scriptsize]{dup2($\cdot$,2)} (s3);
+  \draw[->] (s0) -- node[above,font=\scriptsize]{dup2(sock,0)} (s1);
+  \draw[->] (s1) -- node[above,font=\scriptsize]{dup2(sock,1)} (s2);
+  \draw[->] (s2) -- node[above,font=\scriptsize]{dup2(sock,2)} (s3);
   \draw[->] (s3) -- node[above,font=\scriptsize]{$=$\,\texttt{0x07}} (kill);
   \node[below=8mm of s1, text width=9cm, align=center, font=\scriptsize,
         anchor=north]
