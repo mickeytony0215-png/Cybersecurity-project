@@ -73,10 +73,13 @@
 This report is the defensive companion to our Group~6 attack experiment.
 Where the attack report reconstructed an end-to-end Cyber Kill Chain --
 reconnaissance, honeypot probing and IP-alias bypass, Flask/Jinja2 SSTI,
-fileless ICMP command-and-control, a TCP reverse shell, and DNS/ICMP data
-exfiltration -- this document explains \emph{how the Blue Team detects and
-responds to each of those behaviors}, what tools implement each control,
-and, in detail, \emph{where the defense still fails}.
+fileless ICMP command-and-control, interactive command execution, and
+DNS/ICMP data exfiltration -- this document explains \emph{how the Blue Team
+detects and responds to each of those behaviors}, what tools implement each
+control, and, in detail, \emph{where the defense still fails}. We also cover
+one \emph{anticipated} evasion that Project~1 did not run -- a plain TCP
+reverse shell -- because it is the attacker's natural next move once the
+fileless/ICMP hooks are known; it is marked as beyond-Project-1 throughout.
 The defense is organized as two enforcing layers plus a monitoring plane:
 (1)~a \textbf{network layer} combining a fake-SSH honeypot with an
 \co{iptables} auto-blocker; (2)~a \textbf{kernel layer} built on eBPF that
@@ -90,8 +93,9 @@ all in \co{blue\_ebpf\_mdr\_v2.py}), the cold-start
 We then give an honest evaluation: behavior-based, source-IP-agnostic
 kernel detection is far stronger than IP-based blocking, but it has real
 blind spots -- most importantly, covert channels built from
-\emph{legitimate} syscalls (DNS/ICMP exfiltration) and persistence
-(\co{crontab}) survive the full defense stack. The central lesson is that
+\emph{legitimate} syscalls (the DNS/ICMP exfiltration Project~1 actually ran)
+survive the full defense stack, and persistence (e.g.\ \co{crontab}) is an
+anticipated next step no control here watches. The central lesson is that
 defense-in-depth is a continuous process, not a finished product.
 \end{abstract}
 
@@ -156,21 +160,35 @@ systems you do not own.
 % =====================================================================
 
 \subsection{What we are defending against}
-From the defender's point of view, the relevant attacker behaviors --
-abstracted away from the specific exploit -- are:
+Project~1's run exercised one concrete end-to-end path,
+\begin{center}
+\small\ttfamily Recon $\rightarrow$ Honeypot-trigger $\rightarrow$ IP-bypass
+$\rightarrow$ SSTI $\rightarrow$ Fileless ICMP C2 $\rightarrow$ Command-exec
+$\rightarrow$ Exfiltration
+\end{center}
+so the attacker behaviors we must defend, abstracted away from the specific
+exploit, are (those marked \emph{[P1]} were performed in Project~1's run;
+\emph{[anticipated]} are natural follow-on moves we also handle but that
+Project~1 did not run):
 \begin{itemize}[leftmargin=1.4em]
-  \item \textbf{Probing / target selection} against exposed services.
+  \item \textbf{Probing / target selection} against exposed services.\hfill\emph{[P1]}
   \item \textbf{Application-layer code execution} (SSTI) that turns a web
-        request into arbitrary Python on the host.
+        request into arbitrary Python on the host.\hfill\emph{[P1]}
   \item \textbf{Fileless staging}: code is created as an anonymous in-memory
         file descriptor (\co{memfd\_create}) and executed via
-        \co{/proc/<pid>/fd/<N>}, leaving no file on disk to scan.
+        \co{/proc/<pid>/fd/<N>}, leaving no file on disk to scan.\hfill\emph{[P1]}
   \item \textbf{Covert command-and-control}: control traffic hidden inside
-        ICMP echo payloads (encrypted), or a plain TCP reverse shell.
+        encrypted ICMP echo payloads \emph{[P1]}; or a plain TCP reverse
+        shell \emph{[anticipated]}.
   \item \textbf{Data exfiltration} over alternative protocols (Base32-over-DNS,
-        hex-over-ICMP).
-  \item \textbf{Persistence} via \co{crontab} that re-downloads the agent.
+        hex-over-ICMP).\hfill\emph{[P1]}
+  \item \textbf{Persistence} via \co{crontab} that re-downloads the agent.\hfill\emph{[anticipated]}
 \end{itemize}
+Project~1's documented run had \emph{only the network layer live} (its report
+states eBPF validation was out of scope), so once the IP block was bypassed
+the chain from SSTI onward completed unopposed. The defensive contribution of
+this report is the kernel (eBPF) layer that re-takes control at the
+fileless-staging and C2 steps.
 
 \subsection{Defense-in-depth model}
 The controls form two enforcing layers under one monitoring plane
@@ -234,18 +252,26 @@ T1595 & Active Scanning & Honeypot (\co{honeypot.py}) & Network & Alert\\
 --    & (response)      & \co{iptables} MDR & Network & Enforce (block IP)\\
 T1190 & Exploit Public-Facing App & (not directly detected) & -- & Gap\\
 T1620 & Reflective Code Loading & \co{sys\_enter\_memfd\_create} & Kernel & Alert + taint\\
-T1059 & Exec from \co{/proc/fd} & \co{sys\_enter\_execve} (argv) & Kernel & Enforce (kill)\\
+T1059.006 & Python loader exec from \co{/proc/fd} & \co{sys\_enter\_execve} (argv) & Kernel & Enforce (kill)\\
 T1095 & Non-App-Layer (ICMP) & \co{sys\_enter\_socket} (raw ICMP) & Kernel & Enforce if correlated\\
-T1571 & Non-Standard Port & \co{sys\_enter\_connect} & Kernel & Alert\\
-T1059.006 & Reverse-shell fd hijack & \co{sys\_enter\_dup2/dup3} & Kernel & Enforce (kill)\\
 T1048.003 & Exfil over DNS/ICMP & (not detected) & -- & Gap\\
-T1053.003 & Persistence: Cron & (not detected) & -- & Gap\\
+\midrule
+\multicolumn{5}{@{}l}{\emph{Anticipated extensions (not in Project~1's run; validated in our own round R5)}}\\
+T1571$^\dagger$ & Non-Standard Port & \co{sys\_enter\_connect} & Kernel & Alert\\
+T1059.006$^\dagger$ & Reverse-shell fd hijack & \co{sys\_enter\_dup2/dup3} & Kernel & Enforce (kill)\\
+T1053.003$^\dagger$ & Persistence: Cron & (not detected) & -- & Gap\\
 \bottomrule
 \end{tabularx}
+
+\smallskip
+\footnotesize $^\dagger$Anticipated attacker evasions the stack also covers;
+\emph{not} performed in Project~1's documented run. The reverse-shell hooks
+were exercised in our own validation round R5.
 \end{table}
 
-The three ``Gap'' rows are not oversights; they are the honest boundary of
-this defense and are analyzed in \S\ref{sec:limits}.
+The Project~1 rows above the divider are the techniques actually performed;
+the two ``Gap'' rows among them (T1190, T1048.003) are not oversights but the
+honest boundary of this defense, analyzed in \S\ref{sec:limits}.
 
 % =====================================================================
 \section{Defensive Architecture and Environment}
@@ -682,16 +708,18 @@ of each round.
   \node[good, right=4mm of o2] (o3) {L2 cold-start\\ \texttt{/proc} kill};
   \node[good, right=4mm of o3] (o4) {L2 live kill\\ (execve)};
   \node[good, right=4mm of o4] (o5) {L2 kill\\ (dup2/dup3)};
-  \node[gap,  right=4mm of o5] (o6) {full-stack gap\\ (DNS+cron)};
+  \node[gap,  right=4mm of o5] (o6) {full-stack gap\\ (DNS exfil)};
   \foreach \n/\r/\a in {o1/R1/honeypot probe, o2/R1c/IP alias,
                          o3/R3/cold start, o4/R4/SSTI,
-                         o5/R5/reverse shell, o6/R6/persistent exfil}
+                         o5/{R5$^\dagger$}/reverse shell, o6/R6/DNS exfil}
      \node[above=2mm of \n, align=center, font=\scriptsize] {\textbf{\r}\\ \a};
   \draw[->,thick] ([yshift=-3mm]o1.south west) -- ([yshift=-3mm]o6.south east);
 \end{tikzpicture}}
 \caption{Attack--defense rounds from the defender's side. Green = attack
 stopped; amber = a layer is bypassed (hand-off to the next layer); red = a gap
-nothing in the stack closes. Time flows left to right.}
+nothing in the stack closes. Time flows left to right.
+$^\dagger$R5 (reverse shell) is an anticipated evasion we validated ourselves;
+it was \emph{not} part of Project~1's run.}
 \label{fig:rounds}
 \end{figure}
 
@@ -710,17 +738,23 @@ nothing in the stack closes. Time flows left to right.}
         chain is now killed live at the \co{execve(argv)} hook (memfd is
         tainted/alerted first), so no agent ever beacons. \emph{Layer 2 hot
         path works.}
-  \item \textbf{Reverse shell (R5).} Attacker switches to a TCP reverse
-        shell (no memfd, no raw ICMP), so the four staging hooks stay silent
-        by design. The same tool still catches it: \co{connect} raises an
-        alert, and the process is killed the moment \co{dup2/dup3} redirects
-        all three standard fds to the socket (\co{0x07}). \emph{Caught on the
-        highest-confidence signal, no version change required.}
-  \item \textbf{Persistent DNS exfiltration (R6).} A \co{crontab} planted
-        earlier re-downloads an exfil agent that ships data over DNS. It uses
-        only \co{socket(SOCK\_DGRAM)} + \co{sendto} -- all legitimate
-        syscalls -- so the eBPF MDR raises \emph{no alert}, and the persistence
-        survived every kill. \emph{Full-stack gap (\S\ref{sec:limits}).}
+  \item \textbf{Reverse shell (R5 -- anticipated, not in Project~1).}
+        Project~1's C2 was ICMP; the natural next evasion, once the
+        fileless/ICMP hooks are known, is a TCP reverse shell (no memfd, no
+        raw ICMP), which leaves the four staging hooks silent by design. We
+        validated this case ourselves: the same tool still catches it ---
+        \co{connect} raises an alert, and the process is killed the moment
+        \co{dup2/dup3} redirects all three standard fds to the socket
+        (\co{0x07}). \emph{Caught on the highest-confidence signal, no version
+        change required.}
+  \item \textbf{DNS exfiltration (R6).} In Project~1 the attacker pulls an
+        exfil agent over HTTP, runs it in the background (\co{nohup}), and
+        ships data over DNS. It uses only \co{socket(SOCK\_DGRAM)} +
+        \co{sendto} -- all legitimate syscalls -- so the eBPF MDR raises
+        \emph{no alert}, and the exfiltration completes. \emph{Full-stack gap
+        (\S\ref{sec:limits}).} (A \co{crontab}-based persistence that
+        re-downloads the agent is an anticipated escalation no control here
+        watches; Project~1 did not plant one.)
 \end{enumerate}
 
 \subsection{Reset between runs}
@@ -743,8 +777,8 @@ unresponsive, and a surviving crontab would re-infect the next run.
         (\co{/proc} scan kills an already-running agent) and \emph{hot}
         (\co{execve(argv)} kill, ICMP-correlation backstop) so no beacon is
         established.
-  \item \textbf{TCP reverse shell} -- stopped at the \co{dup2/dup3}
-        fd-hijack, independent of the C2 port.
+  \item \textbf{TCP reverse shell} (anticipated, not in Project~1) --
+        stopped at the \co{dup2/dup3} fd-hijack, independent of the C2 port.
 \end{itemize}
 
 \subsection{Response characteristics}
@@ -756,9 +790,11 @@ drop under load; see \S\ref{sec:misc-limits}.) The network block is bounded
 by the MDR poll interval (default 1\,s).
 
 \subsection{What it does \emph{not} stop}
-Three techniques traverse the entire stack untouched: SSTI itself (the root
-cause), DNS/ICMP exfiltration (legitimate syscalls), and \co{crontab}
-persistence. These define the next section.
+In Project~1's run, two techniques traverse the entire stack untouched: SSTI
+itself (the root cause) and DNS/ICMP exfiltration (legitimate syscalls). A
+third -- \co{crontab} persistence -- is an anticipated escalation no control
+here watches, although Project~1 did not plant one. These define the next
+section.
 
 % =====================================================================
 \section{Limitations and Open Problems}
@@ -852,11 +888,13 @@ make the matcher a fixed target an adversary can study and step around.
 
 \subsection{Persistence is not addressed}
 \label{sec:persist-limits}
-The planted \co{crontab} re-downloads and re-runs the agent on a timer and
-survived every kill in the exercise, because killing a process does not
-remove the mechanism that launches it. No control here watches \co{cron},
-\co{systemd} units, \co{.bashrc}, or other autostart surfaces. Eradication,
-not just termination, is missing.
+Project~1 did not plant persistence (its exfil agent ran as a \co{nohup}
+background process, not from \co{cron}), but it is the obvious next
+escalation, and the stack would not stop it: a \co{crontab} that re-downloads
+and re-runs the agent on a timer would survive every kill, because killing a
+process does not remove the mechanism that launches it. No control here
+watches \co{cron}, \co{systemd} units, \co{.bashrc}, or other autostart
+surfaces. Eradication, not just termination, is missing.
 
 \subsection{Monitoring-plane and operational limits}
 \label{sec:misc-limits}
@@ -928,12 +966,14 @@ where it stops. Layer~1 (honeypot + \co{iptables}) produces clean, early
 signal and sub-second blocking, but is reactive and trivially bypassed by an
 IP change. Layer~2 (eBPF) is the real enforcement: source-IP-agnostic,
 fileless-visible, and able to kill a process in kernel space before a
-dangerous syscall completes -- it stopped both the fileless ICMP C2 (cold and
-hot) and the TCP reverse shell at the \co{dup2/dup3} fd-hijack. Yet the same design
-that makes it strong -- enumerating specific dangerous syscalls -- makes it
-blind to malice built from legitimate syscalls: DNS/ICMP exfiltration and a
-\co{crontab} persistence mechanism survived the entire stack. The honest
-takeaway is the project's thesis stated from the defender's side:
+dangerous syscall completes -- it stopped Project~1's fileless ICMP C2 (cold
+and hot), and the same hooks catch a TCP reverse shell at the \co{dup2/dup3}
+fd-hijack (the attacker's anticipated next move, which Project~1 did not run).
+Yet the same design that makes it strong -- enumerating specific dangerous
+syscalls -- makes it blind to malice built from legitimate syscalls: Project~1's
+DNS/ICMP exfiltration survived the entire stack, and a \co{crontab} persistence
+mechanism would too. The honest takeaway is the project's thesis stated from
+the defender's side:
 defense-in-depth is a continuous process. Each layer is expected to fail
 against some class of attack; security comes from making sure the next layer,
 and the next sensor, is already watching the gap.

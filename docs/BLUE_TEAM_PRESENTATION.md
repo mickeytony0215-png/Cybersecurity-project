@@ -356,8 +356,8 @@
 
 ---
 
-> ### ⚠ 待辦提醒（報告 .tex 與 Project 1 的出入）
-> `BLUE_TEAM_REPORT.tex` 的 round-by-round（`fig:rounds` + §"Round-by-round"）含 **R5 reverse shell** 與
-> **R6 cron-planted DNS exfil**，兩者**都不在 Project 1 正式報告**（C2 只有 ICMP、無 cron 持久化）。本簡報已對齊；
-> 若書面報告也要與 Project 1 完全一致，需把 R5 改標「anticipated/blue-round（非 Project 1）」、R6 的 cron 改為
-> 「`nohup` 背景 + HTTP-delivered agent」並移除 T1053.003。**此為書面報告的後續工作，待你確認再改。**
+> ### ✅ 書面報告已同步對齊（2026-06-12）
+> `BLUE_TEAM_REPORT.tex` 已一併對齊 Project 1：abstract / threat-model（加 [P1] vs [anticipated] 標記 + 真實路徑）/
+> coverage table（T1571·dup2·cron 移到 † anticipated 分隔線下 + 註腳）/ `fig:rounds`（R5 標 †、R6 改「DNS exfil」去掉
+> cron）/ round-by-round 敘事（R5=anticipated、R6=`nohup`+HTTP agent over DNS）/ limitations「Persistence」「What it
+> doesn't stop」/ conclusion 全部改為事實正確。**⚠ PDF 需重編**（本機無 TeX；用 Overleaf 重 build `BLUE_TEAM_REPORT.pdf`）。
