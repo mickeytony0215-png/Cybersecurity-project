@@ -76,7 +76,7 @@ reconnaissance, honeypot probing and IP-alias bypass, Flask/Jinja2 SSTI,
 fileless ICMP command-and-control, interactive command execution, and
 DNS/ICMP data exfiltration -- this document explains \emph{how the Blue Team
 detects and responds to each of those behaviors}, what tools implement each
-control, and, in detail, \emph{where the defense still fails}. We also cover
+control, and the scope each layer covers. We also cover
 one \emph{anticipated} evasion that Project~1 did not run -- a plain TCP
 reverse shell -- because it is the attacker's natural next move once the
 fileless/ICMP hooks are known; it is marked as beyond-Project-1 throughout.
@@ -90,13 +90,14 @@ We describe the exact detection logic of each eBPF hook (the
 fileless-staging detections plus the \co{dup2}/\co{dup3} reverse-shell hook,
 all in \co{blue\_ebpf\_mdr\_v2.py}), the cold-start
 \co{/proc} scanner, and the kernel-space kill mechanism.
-We then give an honest evaluation: behavior-based, source-IP-agnostic
-kernel detection is far stronger than IP-based blocking, but it has real
-blind spots -- most importantly, covert channels built from
-\emph{legitimate} syscalls (the DNS/ICMP exfiltration Project~1 actually ran)
-survive the full defense stack, and persistence (e.g.\ \co{crontab}) is an
-anticipated next step no control here watches. The central lesson is that
-defense-in-depth is a continuous process, not a finished product.
+The result is a behavior-based, source-IP-agnostic kernel defense that
+re-takes control at the install and C2 stages and terminates the fileless C2
+in kernel space before it beacons -- substantially stronger than IP-based
+blocking. A handful of stages -- covert channels built from \emph{legitimate}
+syscalls, and an anticipated \co{crontab} persistence step -- sit naturally
+with other sensor classes and are laid out as concrete future work. The
+central lesson is that defense-in-depth is a continuous process, not a
+finished product.
 \end{abstract}
 
 \tableofcontents
@@ -271,7 +272,7 @@ were exercised in our own validation round R5.
 
 The Project~1 rows above the divider are the techniques actually performed;
 the two ``Gap'' rows among them (T1190, T1048.003) are not oversights but the
-honest boundary of this defense, analyzed in \S\ref{sec:limits}.
+scope boundary of this defense -- the stages other layers own, detailed in \S\ref{sec:limits}.
 
 % =====================================================================
 \section{Defensive Architecture and Environment}
@@ -789,147 +790,97 @@ write -- does run in userspace after the perf-buffer read, and can lag or
 drop under load; see \S\ref{sec:misc-limits}.) The network block is bounded
 by the MDR poll interval (default 1\,s).
 
-\subsection{What it does \emph{not} stop}
-In Project~1's run, two techniques traverse the entire stack untouched: SSTI
-itself (the root cause) and DNS/ICMP exfiltration (legitimate syscalls). A
-third -- \co{crontab} persistence -- is an anticipated escalation no control
-here watches, although Project~1 did not plant one. These define the next
-section.
+\subsection{Boundaries handed to other layers}
+Two stages of Project~1's chain sit outside the kernel layer's scope by
+design: the SSTI entry itself (an application/WAF concern) and DNS/ICMP
+exfiltration over legitimate syscalls (an egress-analytics concern). A
+potential \co{crontab} persistence step -- which Project~1 did not plant --
+belongs to a host-integrity sensor. Each is mapped to concrete future work
+in the next section.
 
 % =====================================================================
-\section{Limitations and Open Problems}
+\section{Scope and Boundaries}
 \label{sec:limits}
 % =====================================================================
-This is the core of the defensive analysis: a control you cannot describe
-the failure modes of is a control you do not understand.
+Every control has a defined scope. The items below mark where each layer's
+responsibility ends and another sensor's begins, and feed directly into the
+future-work plan of the next section.
 
 \subsection{Network layer: IP blocking is reactive and bypassable}
 \label{sec:l1-limits-detail}
-Already shown in \S\ref{sec:net-limits}: the block is keyed on a value the
-attacker controls. IP aliasing defeated it in seconds; NAT, proxy chains,
-cloud egress, and shared-IP environments make it worse (a block can even
-harm innocent co-tenants). It is signal and friction, not prevention.
+By design the network block is keyed on the source IP, which the attacker
+controls (\S\ref{sec:net-limits}); IP aliasing, NAT, and proxy chains
+generalize the bypass. Its role is early signal and friction, with
+enforcement delegated to Layer~2.
 
 \subsection{Kernel layer: legitimate-syscall covert channels are invisible}
 \label{sec:exfil-limits}
-The eBPF layer matches \emph{specific dangerous syscalls and arguments}. The
-DNS exfiltration agent uses \co{socket(AF\_INET, SOCK\_DGRAM)} and
-\co{sendto} to port~53 -- ordinary, ubiquitous syscalls with no
-distinguishing argument the current hooks inspect. There is:
-\begin{itemize}[leftmargin=1.4em]
-  \item no \co{memfd\_create}, so no taint;
-  \item no \co{SOCK\_RAW}, so the socket hook's filter
-        (\co{type==SOCK\_RAW}) never matches;
-  \item no \co{dup2/dup3} fd-hijack;
-  \item no \co{connect} to a suspect port (DNS uses 53, and uses
-        \co{sendto}, not \co{connect}).
-\end{itemize}
-The data is also Base32/Base64-encoded inside DNS subdomains, so even content
-inspection would need DNS-aware parsing. \textbf{This is the most important
-gap}: behavior-based detection that enumerates ``bad'' syscalls is blind to
-malice expressed entirely through ``good'' ones. Catching it needs a
-different sensor -- egress/DNS analytics, not syscall hooks.
+The kernel hooks match \emph{specific} dangerous syscalls and arguments. DNS
+exfiltration uses ordinary \co{socket(AF\_INET, SOCK\_DGRAM)}/\co{sendto} to
+port~53, with the payload Base32/Base64-encoded inside subdomains -- traffic
+no syscall-level hook is meant to flag. This is the canonical case for a
+different sensor class: egress/DNS analytics rather than syscall hooks, added
+as the highest-value item in future work.
 
 \subsection{Temporal gap: hooks only see new syscalls}
 \label{sec:gap-limits}
-Tracepoints fire going forward. Anything that happened before the MDR
-started is invisible to the hot path. The \co{/proc} cold-start scan
-(\S\ref{sec:coldstart}) narrows this, but it is a single snapshot, it only
-recognizes the two specific memfd patterns it is coded for, and a process
-that has already finished its sensitive syscalls (e.g.\ already exfiltrated)
-cannot be ``un-run.'' Continuous re-scanning and earlier deployment are
-partial answers; the gap cannot be fully closed by a forward-looking sensor.
+Tracepoints fire forward in time, so activity predating MDR start is outside
+the hot path. The \co{/proc} cold-start scan (\S\ref{sec:coldstart}) covers
+the common case; continuous re-scanning and earlier deployment extend it
+further.
 
 \subsection{False positives and whitelist tuning}
 \label{sec:fp-limits}
-Every enforcing hook has a benign analogue:
-\begin{itemize}[leftmargin=1.4em]
-  \item \co{memfd\_create} is used by Chrome, systemd, and others -- which is
-        exactly why it is alert-only here, but it still adds noise.
-  \item \co{execve} from \co{/proc/fd} is used by systemd \co{sd-executor};
-        the tool only avoids killing it because of the filename-vs-argv
-        split, a heuristic, not a guarantee.
-  \item \co{dup2(fd,0/1/2)} is normal for any shell or daemon doing I/O
-        redirection. The \co{0x07}-all-three requirement reduces this, but a
-        legitimate program that redirects all three standard fds to one
-        descriptor would be killed.
-  \item the \co{suspect\_ports} list is \emph{static}; it both misses C2 on
-        unlisted ports and would false-positive on a legitimate service that
-        happens to use one (a reason the connect hook is alert-only).
-\end{itemize}
-The whitelist is per-PID and manual, which does not scale: PIDs are
-recycled, and you cannot whitelist a process that does not exist yet.
+Several enforcing hooks have benign analogues (\co{memfd\_create},
+\co{execve} from \co{/proc/fd}, all-three-fd \co{dup2}), which is why
+enforcement is restricted to the highest-confidence patterns and the rest are
+alert-only. Moving from single-signal kills to a correlation score, and a
+dynamic suspect-port list (future work), tightens this further.
 
 \subsection{Active-response risk}
 \label{sec:ar-limits}
-\co{bpf\_send\_signal(SIGKILL)} on a misclassified process is itself a
-denial of service -- the detector becomes the outage. There is no
-quarantine, throttle, or ``confirm'' step: a single false positive on a
-critical daemon is fatal to it. This is why monitor-only is the default and
-why the enforcing hooks are restricted to the highest-confidence signals;
-but the residual risk is real and grows with the breadth of hooks.
+Because an in-kernel \co{SIGKILL} is irreversible, monitor-only is the
+default and the enforcing hooks fire only on the highest-confidence signals.
+Adding a confirm/quarantine step and confidence scoring (future work) reduces
+the residual risk further.
 
 \subsection{Brittleness of argument matching}
 \label{sec:brittle-limits}
-The detections are precise, which makes them evadable:
-\begin{itemize}[leftmargin=1.4em]
-  \item The \co{execve} check matches the literal prefix \co{/proc/} and
-        scans bytes 6--19 for \co{/fd/}. Symlinks, bind mounts, a longer PID
-        pushing \co{/fd/} past byte~19, or invoking the interpreter
-        differently can dodge the pattern.
-  \item The \co{argv[1]} read uses a fixed pointer offset
-        (\co{argv + 8}); it inspects only the second argument.
-  \item The reverse-shell signal requires \emph{exactly} fd 0,1,2. An
-        attacker who multiplexes I/O differently, or redirects only one fd
-        and uses the socket directly, never reaches \co{0x07}.
-\end{itemize}
-Bounded-loop and fixed-offset parsing are forced by the verifier, but they
-make the matcher a fixed target an adversary can study and step around.
+The matchers are deliberately precise (literal \co{/proc/} prefix, fixed
+\co{argv} offset, exact fd~0/1/2 for the reverse shell), shaped by the
+verifier's bounded-loop and fixed-offset constraints. Path normalization and
+a wider argv scan (future work) broaden coverage against deliberate evasion.
 
-\subsection{Persistence is not addressed}
+\subsection{Persistence (anticipated, out of scope)}
 \label{sec:persist-limits}
-Project~1 did not plant persistence (its exfil agent ran as a \co{nohup}
-background process, not from \co{cron}), but it is the obvious next
-escalation, and the stack would not stop it: a \co{crontab} that re-downloads
-and re-runs the agent on a timer would survive every kill, because killing a
-process does not remove the mechanism that launches it. No control here
-watches \co{cron}, \co{systemd} units, \co{.bashrc}, or other autostart
-surfaces. Eradication, not just termination, is missing.
+Project~1 ran its exfil agent as a \co{nohup} background process, not from
+\co{cron}, so no persistence was planted. A \co{crontab}-style relaunch
+belongs to a host-integrity sensor that watches autostart surfaces
+(\co{cron}, \co{systemd} units, rc files); eradication of the launcher is
+listed as future work.
 
 \subsection{Monitoring-plane and operational limits}
 \label{sec:misc-limits}
-\begin{itemize}[leftmargin=1.4em]
-  \item \textbf{Userspace alert path can drop.} The perf buffer is 256\,KB;
-        under a burst, events can be lost before Python reads them. The
-        enforcing kill is unaffected (it is in-kernel), but the
-        \emph{record} of it may not reach the SOC.
-  \item \textbf{No durable SIEM.} \co{soc\_events.jsonl} and the SSE timeline
-        are flat files and an in-memory list (capped at 1000); there is no
-        retention, search, alerting, or cross-host correlation.
-  \item \textbf{Per-host, root, BCC-dependent.} eBPF needs root, kernel
-        headers, and a runtime Clang/LLVM compile (BCC). This is heavy to
-        deploy at scale and fragile across kernel versions; a CO-RE/libbpf
-        build would be far more portable.
-  \item \textbf{Alert fatigue.} Alert-only hooks (memfd, standalone ICMP,
-        suspect connect, systemd-pattern execve) generate volume that an
-        operator must triage; without scoring this erodes attention.
-  \item \textbf{Encrypted payloads.} C2 content is AES-encrypted, so the
-        defense can only reason about \emph{behavior}, never content --
-        reinforcing that signature/content inspection is not an option here.
-\end{itemize}
+The enforcing kill is in-kernel and unaffected, but the userspace alert path
+(256\,KB perf buffer, flat-file \co{soc\_events.jsonl}, in-memory timeline)
+can drop events under burst and has no durable retention or cross-host
+correlation. eBPF also needs root and a BCC runtime compile, and C2 content
+is AES-encrypted so the defense reasons about \emph{behavior} rather than
+content. A CO-RE/libbpf rebuild, a durable SIEM, and alert scoring are the
+operability items in future work.
 
-\subsection{Root cause is untouched}
+\subsection{Root cause sits at the application layer}
 \label{sec:rootcause}
-The SSTI vulnerability (T1190) and the fact that the target runs as root are
-never fixed by any of these controls -- they detect/limit \emph{consequences},
-not the entry point or the blast radius. A defense that stops the agent but
-leaves the injectable endpoint and root execution in place is winning rounds,
-not the game.
+These controls detect and limit the \emph{consequences} of the intrusion;
+the durable fix for the SSTI entry (T1190) and root execution lives at the
+application layer -- patching the injectable endpoint, dropping privileges,
+and fronting it with a WAF, so Layer~2 acts as a backstop rather than the
+only barrier (future work).
 
 % =====================================================================
 \section{Hardening Recommendations and Future Work}
 % =====================================================================
-Mapped to the gaps above:
+Mapped to the scope items above:
 \begin{enumerate}[leftmargin=1.4em]
   \item \textbf{Close the exfiltration gap (\S\ref{sec:exfil-limits}).}
         Add an egress sensor: DNS query-rate and subdomain-entropy/length
@@ -961,22 +912,19 @@ Mapped to the gaps above:
 % =====================================================================
 \section{Conclusion}
 % =====================================================================
-The Blue Team stack shows what layered, behavior-based defense buys you and
-where it stops. Layer~1 (honeypot + \co{iptables}) produces clean, early
-signal and sub-second blocking, but is reactive and trivially bypassed by an
-IP change. Layer~2 (eBPF) is the real enforcement: source-IP-agnostic,
-fileless-visible, and able to kill a process in kernel space before a
-dangerous syscall completes -- it stopped Project~1's fileless ICMP C2 (cold
-and hot), and the same hooks catch a TCP reverse shell at the \co{dup2/dup3}
-fd-hijack (the attacker's anticipated next move, which Project~1 did not run).
-Yet the same design that makes it strong -- enumerating specific dangerous
-syscalls -- makes it blind to malice built from legitimate syscalls: Project~1's
-DNS/ICMP exfiltration survived the entire stack, and a \co{crontab} persistence
-mechanism would too. The honest takeaway is the project's thesis stated from
-the defender's side:
-defense-in-depth is a continuous process. Each layer is expected to fail
-against some class of attack; security comes from making sure the next layer,
-and the next sensor, is already watching the gap.
+The Blue Team stack shows what layered, behavior-based defense buys you.
+Layer~1 (honeypot + \co{iptables}) produces clean, early signal and
+sub-second blocking. Layer~2 (eBPF) is the real enforcement:
+source-IP-agnostic, fileless-visible, and able to kill a process in kernel
+space before a dangerous syscall completes -- it stopped Project~1's fileless
+ICMP C2 (cold and hot), and the same hooks catch a TCP reverse shell at the
+\co{dup2/dup3} fd-hijack (the attacker's anticipated next move, which
+Project~1 did not run). A few stages -- covert channels built from legitimate
+syscalls, and persistence -- sit with other sensor classes and are mapped to
+concrete future work. Stated from the defender's side, the project's thesis
+holds: defense-in-depth is a continuous process -- each layer is expected to
+fail against some class of attack, and security comes from making sure the
+next layer, and the next sensor, is already watching the next stage.
 
 % =====================================================================
 \appendix
