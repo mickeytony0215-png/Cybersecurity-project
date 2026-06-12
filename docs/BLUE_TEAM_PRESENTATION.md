@@ -53,9 +53,9 @@
 - Group 6 · members · date
 
 **Speaker script**
-> 「我們攻擊組那份 Project 1，已經把一整條 kill chain 從偵察打到資料外洩，而且**打穿了**。
-> 今天我換到防守方，沿著**同一條攻擊鏈**走一遍——重點是說清楚：那次為什麼會被打穿，
-> 以及如果把我們的 kernel 層補上去，攻擊在哪一步會被擋下來。」
+> 「我們這組的 Project 1，攻擊是從偵察一路打到資料外洩，整條都打穿了。今天我站防守方，
+> 沿著同一條攻擊鏈走一次，主要想講兩件事：那次為什麼會被打穿，還有如果把我們的 kernel 層
+> 補上去，攻擊會在哪一步被擋下來。」
 
 ---
 
@@ -78,11 +78,11 @@
 - **The Project 1 outcome:** that run had **only the network layer live** (their report: eBPF out of scope) → once the IP block was bypassed, **everything from SSTI onward completed unopposed**.
 
 **Speaker script**
-> 「先把要守的東西講清楚——就是 Project 1 那條鏈，原封不動。偵察找到真目標 `:9999`，
-> 故意踩一下蜜罐、再換 IP 繞過封鎖，然後用 SSTI 打進來、在記憶體裡 fileless 載入、
-> 開一條**走 ICMP** 的 C2、下指令、最後把 `passwd`、`shadow` 這些檔案外洩出去。
-> 這裡有個關鍵：Project 1 那次**只有網路層在跑**，他們報告自己寫 eBPF 不在那次範圍裡。
-> 所以網路層一被繞過，後面 SSTI 到外洩**整段沒人擋**就完成了。今天的重點，就是把缺的那層補回來。」
+> 「先講清楚我們要守的是什麼，就是 Project 1 那條鏈，原封不動。攻擊者先掃 port，找到真正的
+> 目標 `:9999`，故意去踩一下蜜罐、再換個 IP 繞過封鎖，然後用 SSTI 打進來，在記憶體裡 fileless
+> 載入，開一條走 ICMP 的 C2，下指令，最後把 `passwd`、`shadow` 這些檔案帶出去。
+> 這邊有個關鍵要先講：Project 1 那次其實只有網路層在線上，他們報告自己也寫了 eBPF 不在那次範圍裡。
+> 所以網路層一被繞過，從 SSTI 之後整段就沒人擋、直接做完。今天的重點就是把缺的那一層補回來。」
 
 **Screenshot / Visual**
 - Project 1 PDF §2.1「Cyber Kill Chain」的 path 字串 + §4 Attack-Chain table（Recon→…→Exfiltration）。
@@ -105,14 +105,15 @@
 | Command-exec | *(agent already killed upstream)* | Kernel/eBPF | **Prevented** |
 | Exfiltration (DNS) | *(legitimate syscalls only)* | — | **Gap** |
 
-- **Two layers, by design.** Network layer = cheap, earliest signal, **bypassable** (Project 1 bypassed it). Kernel/eBPF layer = the real enforcer — acts on **behavior**, so the IP-alias trick is irrelevant to it. **It re-takes control at Install/C2** — the first kernel-touching step after the bypass.
+- **Layer 1 (network):** cheap, earliest signal — but **bypassable** (Project 1 bypassed it)
+- **Layer 2 (kernel/eBPF):** the real enforcer — acts on **behavior** (IP-alias irrelevant) → **re-takes control at Install/C2**
 
 **Speaker script**
-> 「這張是整場的骨架。我把那條鏈攤平，每一階段配一個防禦控制，而且**誠實標出**
-> 哪些真的能攔、哪些只是記一筆、哪些根本沒守住。你會看到 Project 1 被打穿的點就在第三格——
-> 網路層的 IP 封鎖是反應式的，被換 IP 繞過。但**第二層 eBPF 不看 IP、看行為**，
-> 所以它在 Install 跟 C2 這兩步重新接管——這是繞過之後第一個會碰到 kernel 的動作。
-> 接下來幾頁就照這張表，一階段一階段帶你看。」
+> 「這張是整場的骨架。我把那條鏈攤平，每一個階段配一個防禦，然後老實標出來哪些是真的擋得住、
+> 哪些只是記一筆、哪些根本沒守住。你會看到 Project 1 被打穿的點就在第三列，網路層的 IP 封鎖
+> 是反應式的，被換 IP 就繞過去了。可是第二層 eBPF 不看 IP、它看行為，所以它在 Install 跟 C2
+> 這兩步把控制權接回來，這也是繞過之後攻擊者第一個會碰到 kernel 的動作。
+> 後面幾頁就照這張表，一階段一階段帶大家看。」
 
 **Screenshot / Visual**
 - Report **Table 1「Detection-and-response coverage」(`tab:coverage`)** — 這張表就是這頁的母本。
@@ -130,10 +131,10 @@
 - Every hit appended to `trap.log` (IP / port / first 100 bytes) — the contract handed to the MDR
 
 **Speaker script**
-> 「第一步，偵察。Project 1 一開始就掃 port，掃到 `:2222` 跟 `:9999`。我們在 `:2222` 放假 SSH 當誘餌，
-> 回給它的 banner 跟真的 OpenSSH 版本字串一模一樣，掃描器分不出來。
-> 蜜罐最大的好處是**訊號乾淨**——正常服務不會有人連 `:2222`，所以一被連上，幾乎確定是在踩點。
-> Project 1 那次就從 `.14` 連上來，我們把它的 IP 寫進 `trap.log`，這是交給下一個元件的情報。」
+> 「第一步是偵察。Project 1 一開始就掃 port，掃到 `:2222` 跟 `:9999`。我們在 `:2222` 放一個假的
+> SSH 當誘餌，回給它的 banner 跟真的 OpenSSH 版本字串一模一樣，掃描器分不出來。
+> 蜜罐最大的好處是訊號很乾淨，因為正常服務不會有人去連 `:2222`，所以只要有人連上來，幾乎可以
+> 確定就是在踩點。Project 1 那次就是從 `.14` 連上來的，我們把它的 IP 寫進 `trap.log`，這就是交給下一個元件的情報。」
 
 **Screenshot / Visual** — code: `target/honeypot.py`
 - **L30–36** — `SSH_BANNER` / `FAKE_RESPONSE`
@@ -152,11 +153,11 @@
 - **Project 1's bypass:** add alias `192.168.1.15` → fresh identity → reaches `:9999` again → *the network layer is beaten; the chain must be caught later, in the kernel*
 
 **Speaker script**
-> 「蜜罐一抓到新 IP，我們不到一秒就插一條最高優先權、擋掉所有 port 的 DROP，那個 IP 整台被切掉。
-> 但這也是它的罩門：它擋的是 source IP，而 source IP 是攻擊者自己控制的。
-> Project 1 就是在這裡破的——他加一個 alias IP `.15`，等於換一張新身分證，又連回 `:9999`。
-> 所以這一層**註定會被繞過**，這不是 bug，是設計上預期的：它的任務是給最早的訊號、買時間，
-> 然後把球**交給第二層**。Project 1 的故事到這裡，網路層就出局了。」*（埋伏筆，接 S6 的「接管」）*
+> 「蜜罐一抓到新的 IP，我們不到一秒就插一條最高優先權、擋掉所有 port 的 DROP 規則，那個 IP 整台
+> 就被切掉。但這也是它的罩門：它擋的是 source IP，而 source IP 是攻擊者自己控制的。
+> Project 1 就是在這裡破的，他加一個 alias IP `.15`，等於換了一張新身分證，又連回 `:9999`。
+> 所以這一層本來就會被繞過，這不是 bug，是設計上就預期的：它的任務是給最早的訊號、幫我們爭取時間，
+> 然後把球交給第二層。Project 1 的劇情到這裡，網路層就出局了。」*（埋伏筆，接 S6 的「接管」）*
 
 **Screenshot / Visual** — code: `blue_team/blue_mdr_network.py`
 - **L47–52** — `block_ip()` (the `iptables` command)
@@ -175,10 +176,10 @@
 - **Low overhead** — verifier-checked, JIT-compiled to native code, O(1) hash-map lookups
 
 **Speaker script**
-> 「為什麼第二層用 eBPF？因為 Project 1 繞過網路層之後，接下來每一步——SSTI 生出來的 loader、
-> `memfd`、`execve`、ICMP——**全都會經過 kernel**，而 eBPF 就掛在那裡。
-> 它不看 IP，所以剛剛換 IP 那招對它無效；它能直接看到 fileless 的 syscall 參數；
-> 而且掛在 syscall 的**進入點**，可以在危險動作真的發生**之前**就攔下來。」
+> 「為什麼第二層要用 eBPF？因為 Project 1 繞過網路層之後，接下來每一步，不管是 SSTI 生出來的
+> loader、`memfd`、`execve` 還是 ICMP，全部都會經過 kernel，而 eBPF 就掛在那裡。
+> 它不看 IP，所以剛剛換 IP 那招對它沒用；它能直接看到 fileless 的 syscall 參數；
+> 而且它掛在 syscall 的進入點，可以在危險動作真的發生之前就先攔下來。」
 
 **Screenshot / Visual**
 - Report **Figure「eBPF pipeline」(`fig:pipeline`)** (C → BCC → bytecode → verifier → JIT → tracepoint → perf buffer).
@@ -190,22 +191,22 @@
 > **Kill-chain phase:** Install (T1620) + C2 (T1095) · **this is Project 1's *actual* C2 — and where we re-take control**
 
 **Slide**
-- Project 1's chain: `SSTI → memfd_create → write agent → fork → execve /proc/<pid>/fd/<N> → ICMP beacon`
-- Hook 1 `memfd_create` → **alert + taint** the process (don't kill — memfd has benign uses)
-- Hook 0 `fork` → **propagate the taint** to children (one fork shouldn't shake off tracking)
-- Hook 2 `execve` → argv points at `/proc/<pid>/fd/<N>` = the fileless loader → **KILL** ← *agent never runs → no beacon → no command-exec → no exfil*
-- Hook 3 raw ICMP socket → alone only alerts; **correlated with the memfd taint → KILL** (this is Project 1's exact ICMP C2)
-- **Cold-start `/proc` scanner**: if the MDR starts *after* the agent is already running, it still finds and kills the in-memory `python3 /proc/<pid>/fd/<N>`
-- **Design principle:** enforce only on the **highest-confidence** signal, alert on the rest
+- Project 1's C2 path: `memfd_create → write agent → fork → execve /proc/fd → ICMP beacon`
+- `memfd_create` → **alert + taint** (benign uses → don't kill)
+- `fork` → **taint inherited** by children
+- `execve` argv = `/proc/<pid>/fd/<N>` → **KILL** ← *no agent → no beacon → no exfil*
+- raw ICMP socket + memfd taint → **KILL** (Project 1's exact C2)
+- Cold-start: a `/proc` scanner kills an already-running agent
+- *Enforce only on the highest-confidence signal; alert on the rest*
 
 **Speaker script**
-> 「這一頁是高潮，因為它擋的就是 Project 1 真正用的那條 C2。攻擊鏈是：SSTI 打進來，
-> `memfd` 在記憶體開一個檔，寫進 agent，fork 之後用 `/proc/fd` 執行它，再透過 ICMP 回連。
-> 我們不會在 `memfd` 那步就殺，因為它有正常用途——我們先把這個行程**標記**起來，連 fork 的小孩一起標。
-> 真正動手是在 `execve` 看到 argv 指到 `/proc/fd` 的時候，**直接 kill**——agent 根本沒機會跑起來，
-> 沒 beacon、沒下指令、後面也沒得外洩。那條 ICMP C2，單獨看只記一筆，但跟前面 memfd 標記**對得上**就殺。
-> 還有一個情境：如果我們比 agent 晚開，有一支 `/proc` 掃描器會把已經在跑的揪出來補殺。
-> 一句話：網路層在第四步出局，kernel 層在這一步**把控制權搶回來**。」
+> 「這一頁是重點，因為它擋的就是 Project 1 真正用的那條 C2。攻擊鏈是這樣：SSTI 打進來，
+> `memfd` 在記憶體開一個檔，把 agent 寫進去，fork 之後用 `/proc/fd` 去執行，再透過 ICMP 回連。
+> 我們不會在 `memfd` 那一步就殺，因為它本身有正常用途，我們先把這個行程標記起來，連它 fork 出來的小孩也一起標。
+> 真正動手是在 `execve` 看到 argv 指到 `/proc/fd` 的時候，這時候直接 kill，agent 根本沒機會跑起來，
+> 沒有 beacon、沒辦法下指令，後面也就沒得外洩。那條 ICMP C2 單獨看只會記一筆，但只要它跟前面 memfd 的標記對得上，我們也殺。
+> 還有一種情況：如果我們比 agent 晚開，有一支 `/proc` 掃描器會把已經在跑的揪出來補殺。
+> 一句話，網路層在第四步出局，kernel 層在這一步把控制權搶回來。」
 
 **Screenshot / Visual** — code: `blue_team/blue_ebpf_mdr_v2.py`
 - **L106–116** — memfd hook (alert-only / taint)
@@ -220,7 +221,8 @@
 > **Kill-chain phase:** C2 evasion · ⚠ **beyond Project 1 (it used ICMP); validated in blue round R5 as the attacker's natural next move**
 
 **Slide**
-- **Honest scope note:** Project 1's C2 was ICMP (S6). A motivated attacker, once the memfd/ICMP hooks are known, switches to a **pure TCP reverse shell** — `socket → connect → dup2 → pty` — which keeps **all four S6 hooks silent**. We validated this case ourselves (round R5).
+- **Scope:** *not in Project 1* (its C2 was ICMP) — the attacker's likely next move; validated in round R5
+- A pure TCP reverse shell (`socket → connect → dup2 → pty`) keeps **all four S6 hooks silent**
 - Same tool still catches it on a **different, higher-confidence** signal:
   - Hooks 5/6 `dup2`/`dup3`: per-PID bitmask — stdin/stdout/stderr each set one bit
   - All three redirected to the **same socket** → mask `0x07` → **confirmed reverse shell → SIGKILL**
@@ -228,12 +230,12 @@
 - Kill = `bpf_send_signal(9)`, **in-kernel, before the syscall completes**
 
 **Speaker script**
-> 「這一頁我先講清楚範圍：**Project 1 用的是 ICMP，沒有用 reverse shell**。但防守要想下一步——
+> 「這一頁我先把範圍講清楚：Project 1 用的是 ICMP，並沒有用 reverse shell。但站在防守方要想下一步：
 > 攻擊者一旦知道我們在盯 memfd 跟 ICMP，最自然的閃法就是改用純 TCP 的 reverse shell，
-> 完全不碰前面那四個 hook。這個情境我們自己驗過（R5 回合）。
-> 我們換看一個更高可信度的行為：reverse shell 一定把 stdin、stdout、stderr 三個都接到同一個 socket。
-> 用 bitmask 去追，湊齊 `0x07` 就確定，直接在 kernel 裡 `bpf_send_signal` 殺掉，連 80、443 都擋得下來。
-> 這頁是『縱深』——就算攻擊者進化，我們的偵測也已經在等他了。」
+> 完全不碰前面那四個 hook。這個情境我們自己有驗過，就是 R5 那一回合。
+> 我們的做法是換去看一個更可信的行為：reverse shell 一定會把 stdin、stdout、stderr 三個都接到同一個 socket。
+> 我們用一個 bitmask 去追，三個湊齊變成 `0x07` 就確定，直接在 kernel 裡用 `bpf_send_signal` 殺掉，它就算走 80 或 443 也一樣擋得下來。
+> 這頁要講的是縱深：就算攻擊者進化，我們的偵測也已經先準備好在等它了。」
 
 **Screenshot / Visual**
 - **Figure:** report **「Reverse-shell bitmask state machine」(`fig:dup2`)** (`000 → 001 → 011 → 111 → SIGKILL`)
@@ -249,21 +251,21 @@
 
 **Slide**
 - Reading Project 1's **same chain**, two stages are still open — honestly:
-  - **Exploit / SSTI (T1190):** the SSTI itself is **never detected** — we only catch what it *spawns* (the memfd/execve agent). No WAF = the entry stays open.
-  - **Exfiltration / DNS (T1048.003):** Project 1's exfil agent ships data over DNS using only `socket(SOCK_DGRAM)+sendto` to `:53` → **all legitimate syscalls → no eBPF hook fires**. eBPF is blind to malice done with "good" syscalls.
+  - **SSTI entry (T1190):** never detected — we only catch what it *spawns*; no WAF = the door stays open
+  - **DNS exfil (T1048.003):** only `socket(SOCK_DGRAM)+sendto` to `:53` → **legit syscalls → no hook fires** (eBPF can't see malice in "good" syscalls)
 - Two structural caveats:
   - **Network IP-block is reactive/bypassable** — Project 1's alias trick; NAT/proxy generalize it.
   - **The detector is itself a risk** — a misclassified `bpf_send_signal(9)` is a self-inflicted DoS.
 - **Root cause remains:** the SSTI on `:9999` and running as **root** were never fixed — Project 1 only succeeded because both held.
 
 **Speaker script**
-> 「接下來講比較誠實的部分。把 Project 1 那條鏈再看一次，有兩個階段我們其實沒守住：
-> 第一，SSTI 那個入口我們**從頭到尾沒偵測到**，我們只抓它生出來的 agent，沒有 WAF 門就一直開著；
-> 第二，他最後的外洩走 DNS，用的全是正常 syscall——`socket`、`sendto` 打到 53 port，
-> 我們一個 hook 都不會響，eBPF 對『用好的 syscall 做壞事』是瞎的。
-> 另外兩個風險：換 IP 就破網路層（Project 1 就這樣做的）；還有我們自己的偵測器只要誤判一次，
-> 那一發 kill 就等於自己把服務弄掛。而最根本的——`:9999` 那個 SSTI 跟用 root 跑，
-> Project 1 之所以會成功，就是因為這兩件事一直都在，而我們從頭到尾沒修。」
+> 「接下來講比較誠實的部分。把 Project 1 那條鏈再看一次，有兩個階段我們其實沒守住。
+> 第一個是 SSTI 那個入口，我們從頭到尾都沒偵測到，只抓得到它生出來的 agent，沒有 WAF 那道門就一直開著。
+> 第二個是他最後的外洩走 DNS，用的全是正常 syscall，`socket`、`sendto` 打到 53 port，
+> 我們一個 hook 都不會響，eBPF 對『用好的 syscall 做壞事』就是看不到。
+> 另外還有兩個風險：換個 IP 就能破網路層，Project 1 就是這樣做的；還有我們自己的偵測器只要誤判一次，
+> 那一發 kill 等於自己把服務弄掛。最根本的是，`:9999` 那個 SSTI 跟整個服務用 root 在跑，
+> Project 1 會成功就是因為這兩件事一直都在，而我們從頭到尾沒去修。」
 
 **Screenshot / Visual**
 - Report **Table 1 (`tab:coverage`)** 的 **Gap** 列（T1190 / T1048.003）反白標紅。
@@ -280,12 +282,12 @@
 - **False-positive/DoS risk →** move from single-signal kills to **scoring** (correlate `connect` + `dup2` + new-socket) → auto-kill only on high scores, else **quarantine**
 
 **Speaker script**
-> 「每個缺口都有對應的解法，而且都對著 Project 1 剛剛那兩個破口：
-> 外洩那段要靠 DNS 流量分析這種**另一種感測器**——看查詢量、看亂度，不是再加 syscall hook；
-> 入口要把 SSTI 修掉、在 `:9999` 前面加一道 WAF；還有 Project 1 是用 root 跑的，
-> 降權限可以把後面每一步的影響範圍都縮小。至於誤判風險，把『單一訊號就殺』改成『**看分數**』，
-> 分數夠高才殺、不然先隔離。最重要的是——把入口補起來，讓 kernel 這層回到它該有的位置：
-> 是**最後一道後援**，而不是唯一一道牆。」
+> 「每個缺口其實都有對應的解法，而且都對著 Project 1 剛剛那兩個破口。
+> 外洩那一段，要靠 DNS 流量分析這種不一樣的感測器，看查詢量、看亂度，而不是再加 syscall hook。
+> 入口要把 SSTI 修掉，在 `:9999` 前面加一道 WAF。還有 Project 1 是用 root 跑的，
+> 把權限降下來，後面每一步能造成的影響都會小很多。誤判的風險，就把『單一訊號就殺』改成看分數，
+> 分數夠高才殺，不然先隔離。但最重要的還是把入口補起來，讓 kernel 這層回到它該在的位置，
+> 是最後一道後援，而不是唯一一道牆。」
 
 ---
 
@@ -296,9 +298,9 @@
 - Defense-in-depth is a continuous process: every layer is expected to fail against some phase → security is making sure **the next layer is already watching that phase**.
 
 **Speaker script**
-> 「一句話收尾：Project 1 會被打穿，是因為那次只有一層在線、而且那層可以被繞。
-> 縱深防禦是一個持續的過程——kill chain 上每一層都會被某一階段繞過，
-> 真正重要的是，下一層、下一個感測器，有沒有已經在盯著那個破口。」
+> 「最後一句話收尾：Project 1 會被打穿，是因為那次只有一層在線上，而且那層可以被繞過。
+> 縱深防禦是一個持續的過程，kill chain 上每一層都會被某個階段繞掉，
+> 真正重要的是下一層、下一個感測器，有沒有已經在盯著那個破口。」
 
 **Screenshot / Visual (optional)**
 - Report **「attack–defense rounds」(`fig:rounds`)** 當收尾全景（綠 / 琥珀 / 紅）。
