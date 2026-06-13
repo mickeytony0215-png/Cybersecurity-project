@@ -553,6 +553,53 @@ execve("/bin/sh", ...);               // 換成 shell，I/O 已經是網路
 
 ---
 
+### S8 深入備答（防禦戰果 scoreboard — 程式碼彙整，被逐項追問時念）
+
+> S8 是 recap 頁：把 S4／S6／S7 的攔截程式碼全收進一張 coverage 表（報告 `tab:coverage`）。所以「看到很多程式碼」其實是前面幾頁的彙整。這裡逐項備好「怎麼判斷／程式在哪／為什麼這樣設計」。
+
+#### 怎麼讀 coverage 表（`tab:coverage`，本頁主圖）
+
+- **三種動作**：**Enforce** ＝擋得住（停掉攻擊）、**Alert** ＝只記一筆不擋、**Gap** ＝沒守住。
+- **`†` 分隔線**：線下三列（`connect`、`dup2/dup3`、cron）是 **anticipated**（Project 1 沒做、我們預先備好的演化），跟實際打過的誠實分開。
+- **報告時**：Enforce 列（iptables、execve、ICMP、dup2）上綠 highlight；兩個 Gap 列（T1190 SSTI、T1048.003 DNS exfil）是**誠實標註、不是疏漏**，不想露出就灰掉。
+
+#### 戰果①｜execve `/proc/fd` kill（L136–178）—— 最該講清楚的一段
+
+- 抓的是 fileless 載入：`execve` 想從 `/proc/<pid>/fd/<N>` 起一個記憶體裡的程式。
+- **故意分兩種 check、處置不同**：
+  - **Check 1（filename 本身是 `/proc/.../fd/...`，L136–148）→ 只 alert**：因為 systemd 的 sd-executor 正常就這樣用 → 殺了會誤殺系統。
+  - **Check 2（argv[1] 是 `/proc/.../fd/...`，如 `python3 /proc/PID/fd/N`，L149–178）→ KILL**：這是紅隊 fileless 的特徵，正常程式不會這樣帶參數。
+- 一句話：**同樣碰 `/proc/fd`，只在「當參數丟給直譯器」那種紅隊樣式才殺，系統自己的合法用法只記一筆** → 精準、降誤殺。
+
+#### 戰果②｜raw ICMP ＋ memfd 關聯 kill（L191–211）
+
+- `socket(family=2, type=3, protocol=1)` ＝ `AF_INET / SOCK_RAW / IPPROTO_ICMP` → 有人要開原始 ICMP socket（Project 1 的 C2 通道）。
+- **只開 raw ICMP 不殺（alert）**：`ping` 等正常工具也會開 → 信心不足。
+- **要殺＝關聯**：這個行程（或它的父行程）先前出現過 `memfd_create`（被 taint 過）→ `memfd + raw ICMP` 同時成立才算 fileless C2 → kill。這就是「多訊號關聯」的雛形。
+
+#### 戰果③｜memfd_create（L106–119）＋ taint 沿 fork 繼承（L95–100）
+
+- `memfd_create` 本身**只 alert + 標記（taint）**、不殺 —— 因為它有正常用途。
+- taint 會**沿 fork 繼承**（fork hook 把父行程的時間戳複製給子行程）→ 之後子行程開 raw ICMP（戰果②）才有依據關聯。
+
+#### 戰果④｜cold-start /proc 掃描器（Python，掃 L382–395／殺 L481–492）
+
+- 解決「防禦比 agent 晚啟動」：eBPF 只看得到**掛載之後**的 syscall，掛載前已在跑的 agent 看不到。
+- 做法：啟動時掃一遍 `/proc/[0-9]*/exe`，`readlink` 若指向 `memfd:`（記憶體匿名檔）→ 那就是 fileless agent → `--kill` 模式下 `os.kill(pid, SIGKILL)`。
+- **限制（誠實講）**：① 只在**啟動時掃一次**、不是持續輪詢 ② 只抓 exe symlink 指向 `memfd:` 的，其他 fileless 手法抓不到。
+
+#### S8 可能被追問
+
+| 追問 | 一句話回答 |
+|---|---|
+| 「execve 碰 `/proc/fd` 不會誤殺系統嗎？」 | 不會：filename 命中只 alert（systemd 合法用法），只有 argv[1] 帶 `/proc/fd`（紅隊樣式）才殺。 |
+| 「為什麼 raw ICMP 不直接殺？」 | `ping` 等正常工具也開 raw ICMP → 信心不足；要跟 memfd taint 關聯才殺。 |
+| 「memfd 為什麼只 alert？」 | 有正常用途，先 taint，等高可信度（execve / ICMP 關聯）再處置。 |
+| 「防禦晚開、agent 已在跑怎辦？」 | 啟動時 /proc 掃 exe→`memfd:` 的行程補殺（但只掃一次、只抓 memfd）。 |
+| 「表上為什麼還有 Gap？」 | SSTI（應用層）、DNS exfil（合法 syscall）守不到 → 誠實標、交給 S9。 |
+
+---
+
 ## Asset checklist
 
 **Code screenshots（藍隊程式碼）**
