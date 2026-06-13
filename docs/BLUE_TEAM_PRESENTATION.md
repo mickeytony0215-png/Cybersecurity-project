@@ -472,6 +472,13 @@ execve("/bin/sh", ...);               // 換成 shell，I/O 已經是網路
 - 實務流程：先跑 monitor 確認偵測無誤判 → 再切 `--kill` enforce。兩份偵測邏輯完全一樣，差別只在 kill 那行有沒有被編進去。
 - 精準度補充：`--kill` 模式下也只有 `execve`/`ICMP_CORR`/`dup2`/`dup3` 真的填殺；`memfd`/`connect` 仍替換成空字串（alert-only）→ 只在最高可信度訊號上 enforce。
 
+**手動 vs 自動（「先 monitor → 再切 `--kill`」這句常被誤解成自動切換，先釐清）**
+
+- **選模式 ＝ 人手動，而且要重啟**：monitor／enforce 是命令列旗標決定的（預設 monitor；加 `--kill` 才 enforce），而且是 **load-time** 決定 —— `if args.kill:`（L453）在 `b = BPF(text=src)`（L496）把 C 編譯載進 kernel **之前**就決定填「殺」還是「空」，載入那刻就定死。**不能執行中熱切換，要換模式就得停掉程式、重新啟動。**
+  - monitor：`sudo python3 blue_ebpf_mdr_v2.py` ／ enforce：`sudo python3 blue_ebpf_mdr_v2.py --kill`
+- **偵測與殺 ＝ eBPF 在 kernel 內自動**：載入後人就不在每次事件的迴圈裡了 —— bitmask 湊滿 `0x07` 的確認、以及 `--kill` 模式下 `bpf_send_signal(9)` 的觸發，全在 kernel 自動完成；Python 端 `while True: b.perf_buffer_poll()`（L597）只負責把事件撈出來記 log／顯示，**不參與殺的決策**。
+- **一句話**：那句「先 monitor 確認無誤判 → 再切 `--kill`」講的是**運維 SOP**（人決定、需重啟）；一旦切進 enforce，偵測到 reverse shell 就殺是**全自動**。
+
 #### 收尾兩個常見追問
 
 | 追問 | 一句話回答 |
