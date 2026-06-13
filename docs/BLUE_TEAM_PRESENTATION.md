@@ -517,6 +517,31 @@ execve("/bin/sh", ...);               // 換成 shell，I/O 已經是網路
 | 「正常程式也用 `dup2`，不會誤判？」 | 單一次 `dup2` 不會殺；要同一行程把 fd 0/1/2 **三個都**接走、湊滿 `0x07` 才確認，正常程式極少這樣；且預設 monitor 先驗證、無誤判才 enforce。 |
 | 「改用 `dup3` 或走 80/443 不就繞過？」 | `dup3` 已一起掛（`sys_enter_dup3`，同一套偵測）；Python `os.dup2(..., inheritable=False)` 實際就是呼叫 `dup3`。判斷看行為不看 port，走 80/443 照擋。 |
 
+#### 偵測的極限：會漏 / 會誤殺（機制層級，被深入追問時念）
+
+**前提要修正：不是「一定抓得到」。** 偵測只在「同一行程把 fd 0/1/2 三個都 `dup2`/`dup3` 過」才觸發。
+
+**會漏（false negative）** — 以下 reverse shell 變體湊不到 `0x07`：
+- 只接 stdin+stdout、stderr 丟 `/dev/null` → mask 停在 `0x03`。
+- fd 在 `execve` 前由父行程接好（socat、fd 繼承）→ shell 自己沒呼叫 dup2。
+- 改用 `dup()` / `fcntl(F_DUPFD)` 複製 fd → 我們沒掛這兩個 syscall。
+
+→ 所以 S7 的定位是「高價值的行為感測器」，不是保證；當縱深的一層，誠實不誇大。
+
+**會誤殺（false positive）—— 而且面不小** — 根因：程式碼（L279–283）**只看 `newfd`（接到哪），沒檢查 `oldfd`（從哪來、是不是 socket）**。「三個 std fd 都被重導」是 reverse shell 的**必要但不充分**條件，正常程式也會中：
+
+| 正常情境 | 為什麼會湊到 `0x07` |
+|---|---|
+| **daemon 化**（雙 fork 變常駐） | 教科書寫法 `dup2(/dev/null, 0/1/2)` 把三個 std fd 重導 → 剛好 `0x07` |
+| **sshd / login / tmux / screen** | 開互動 shell 時把 PTY 接到 0/1/2（合法 SSH 登入在 fd 層級長得跟 reverse shell 一樣） |
+| **nohup / setsid / systemd 起服務** | 重導服務 stdio 到 log／journal／socket |
+
+這些在 `--kill` 模式下都會被誤殺 → 這正是「self-DoS」的來源。
+
+**為什麼設計上扛得住**：① 預設 monitor、要人手動 `--kill`（正因 heuristic 很寬，先跑一段確認無誤判才敢 enforce）② whitelist（`is_whitelisted`）跳過已知正常 PID ③ **S9 confidence scoring 正是補這個洞** —— 把 `dup2` 跟 `connect` ＋「一個剛開的網路 socket」關聯算分，唯有接過來的 fd 確實是剛 connect 出去的 socket 才殺 → 排掉 daemon(`/dev/null`)、sshd(pty) 這類誤殺。
+
+**一句話**：「三個 std fd 都被 dup2」≠「一定是 reverse shell」。現版只數「接幾個」、不看「從哪接」，所以**既會漏**（非 dup2 變體）**也會誤殺**（daemon、sshd 等合法三-fd 重導）；要兩者都降，得做 S9 的多訊號關聯（`oldfd` 是不是剛 `connect` 的 socket）。
+
 #### 新增術語（接前面術語表，被點名詞時直接念）
 
 | 術語 | 一句話解釋 |
