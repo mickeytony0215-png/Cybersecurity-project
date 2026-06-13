@@ -375,6 +375,7 @@
 | 術語 | 一句話解釋 |
 |---|---|
 | Honeypot（蜜罐） | 沒有正常用途的假服務（我們的假 SSH `:2222`）；任何連線幾乎都是攻擊者踩點 → 訊號乾淨。 |
+| syscall（系統呼叫） | 程式向 Linux kernel 請求服務的唯一正式入口（開檔／socket／`execve`／`sendto`…）；攻擊者要「做事」就一定得經過它 → 所以 eBPF 掛在這偵測。完整見下方「syscall 底層觀念」。 |
 | eBPF | 把小程式安全載進 Linux kernel、掛在 syscall 等事件上的技術；經 verifier 驗證、JIT 編成原生碼，低負擔。 |
 | BCC | 把 eBPF 的 C 程式在啟動時編譯、載入 kernel 的工具鏈（我們用的）。 |
 | MDR（Managed Detection & Response） | 偵測到威脅就自動回應 —— 網路層自動封 IP、kernel 層自動 kill。 |
@@ -408,6 +409,36 @@
 | quarantine（隔離） | 分數不夠高時不殺，先凍結 / 限制該行程，留人工確認。 |
 | defense-in-depth（縱深防禦） | 多層防禦，每層守不同階段；假設每層都會被某些攻擊繞過，靠下一層補上。 |
 | self-DoS / false positive | 誤判；偵測器若誤殺正常行程，等於自己造成服務中斷 → 所以要 monitor 先行 ＋ 評分。 |
+
+---
+
+### syscall 底層觀念（被追問「eBPF 為什麼有效」時念）
+
+> 對應 S5/S6 的 eBPF 段落 —— syscall 是 eBPF 偵測能成立的根基。
+
+**一句話**：syscall（系統呼叫）＝ 一般程式向 Linux kernel「請求服務」的唯一正式入口。程式自己沒權限直接做的事（開檔、開 socket、執行新程式、送封包…），都得透過 syscall 叫 kernel 代勞。
+
+**user space vs kernel space** — 系統記憶體分兩塊權限：
+
+- **user space**：一般程式（Python、honeypot、攻擊者 agent…）跑的地方，碰不到硬體／檔案系統／網卡。
+- **kernel space**：作業系統核心，掌管所有硬體與資源。
+- 程式要做特權／危險的事不能自己動手，只能喊一聲 syscall 請 kernel 做；kernel 先檢查權限再代勞 → 一道強制的安全邊界。
+
+**運作流程**：`程式 open("/etc/passwd")` → libc 包成 syscall 號碼＋參數 → CPU 切到 kernel 模式（user→kernel）→ kernel 檢查權限、實際開檔 → 回傳 fd、切回 user 模式。
+
+**本專案攻擊鏈用到的 syscall**：
+
+| syscall | 在攻擊鏈裡做什麼 |
+|---|---|
+| `execve` | 執行新程式（跑 `/proc/<pid>/fd` 的 fileless agent） |
+| `memfd_create` | 在記憶體開匿名檔（fileless 載入） |
+| `socket` / `connect` | 開連線、連回 C2 |
+| `dup2` / `dup3` | 把 fd 0/1/2 接到 socket（reverse shell） |
+| `sendto` | 送出封包（DNS／ICMP 外洩） |
+
+**為什麼 eBPF 掛在 syscall 有效**：攻擊者再怎麼隱匿（換 IP、fileless 不落地、加密 C2 內容），只要要「做事」就一定得經過 syscall、一律過 kernel。eBPF 掛在 syscall 進入點（`sys_enter_execve`／`sys_enter_dup2`…）→ ①**躲不掉**（磁碟掃不到的 fileless，syscall 參數照樣看得到）②**早攔**（掛進入點＝危險動作真正發生前）③**不看 IP**（看的是動作，換 IP 沒用）。
+
+**天花板（對應 S8/S9 的 gap）**：這是「列舉壞 syscall」式偵測，藏在「合法 syscall」裡的惡意看不到 —— DNS 外洩用的是完全正常的 `socket(SOCK_DGRAM)` ＋ `sendto`，syscall 層面跟正常查 DNS 一模一樣 → 所以 S9 才要另一種感測器（egress／DNS 流量分析）來補。
 
 ---
 
